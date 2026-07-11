@@ -1,0 +1,22 @@
+# === 1. Rust 編譯產物與暫存檔 ===
+/target/
+**/*.rs.bk
+
+# === 2. macOS 系統檔案 ===
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# === 3. Windows 系統檔案 ===
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# === 4. 常見編輯器與 IDE 設定檔 ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
