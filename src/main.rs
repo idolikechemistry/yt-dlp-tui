@@ -1,155 +1,318 @@
+mod args;
 mod config;
-mod executor;
+mod parser;
+mod proc;
 mod setup;
+mod ui;
+mod utils;
 
-use inquire::{Confirm, Select, Text};
+use anyhow::{Context, Result};
+use args::Args;
+use clap::{CommandFactory, Parser};
+use proc::LogManager;
+use std::path::PathBuf;
+use std::process;
 
-// 必須加上 Clone 才能在多線程中分配給不同的任務
-#[derive(Clone)]
-pub struct DownloadOption {
-    pub display_name: &'static str,
-    pub args: Vec<&'static str>,
-}
-
-impl std::fmt::Display for DownloadOption {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_name)
-    }
-}
-
-#[derive(Clone)]
-pub struct AppConfig {
-    pub urls: Vec<String>,
-    pub base_args: Vec<String>,
-    pub need_subs: bool,
-    pub need_thumbnail: bool,
-    pub download_dir: String,
-    pub temp_dir: String,
-}
-
-// 將 main 宣告為 tokio 的非同步進入點
 #[tokio::main]
 async fn main() {
-    let config_manager = config::ConfigManager::load_or_create();
-    let final_download_dir = config_manager.get_final_download_dir();
+    println!("🚀 dl-media v{}", env!("CARGO_PKG_VERSION"));
+    if let Err(e) = run().await {
+        eprintln!("\n❌ [執行錯誤]: {}", e);
+        for cause in e.chain().skip(1) {
+            eprintln!("  原因: {}", cause);
+        }
+        process::exit(1);
+    }
+}
 
-    if !setup::check_environment() {
-        std::process::exit(1);
+/// 互動式配置下載偏好（選擇語言與解析度規格）
+fn setup_download_options(
+    videos: &mut Vec<parser::VideoItem>,
+    cookie_args: &[String],
+    is_silent: bool,
+    media_type: u8,
+    target_ext: &str,
+) {
+    if is_silent {
+        return;
+    }
+    for video in videos.iter_mut() {
+        println!("⏳ 正在獲取 {} 的可選設定...", video.title);
+        if let Ok(info) = parser::probe_video_info(&video.url, cookie_args) {
+            video.chosen_langs = ui::select_subtitles(&info.langs);
+            if media_type != 1 && target_ext == "mkv" {
+                video.chosen_format = ui::select_resolution(&info.formats);
+            }
+            video.metadata = Some(info);
+        } else {
+            println!("⚠️ 無法獲取 {} 的進階資訊，將使用預設參數。", video.title);
+        }
+    }
+}
+
+async fn run() -> Result<()> {
+    // 1. 命令列參數解析
+    let args = Args::parse();
+    if let Some(generator) = args.generator {
+        let mut cmd = Args::command();
+        let name = cmd.get_name().to_string();
+        clap_complete::generate(generator, &mut cmd, name, &mut std::io::stdout());
+        return Ok(());
+    }
+    args.validate()?;
+
+    // 2. 初始化設定環境並載入偏好 config.toml
+    let (app_config_dir, config) = setup::init_config()?;
+    let config_file_path = app_config_dir.join("config.toml");
+    if args.config {
+        setup::interactive_config_setup(&config_file_path, config)?;
+        println!("👋 設定已完成，您可以重新執行程式來套用新設定。");
+        return Ok(());
     }
 
-    println!("\n歡迎使用 yt-dlp TUI 下載工具 🚀");
-    println!("📦 檔案將儲存至: {}", final_download_dir);
-    println!("(設定檔路徑: {})\n", config_manager.config_dir.display());
+    // 3. 系統核心依賴工具檢查
+    setup::check_dependencies()?;
 
-    let url_input = Text::new("請輸入影片或播放清單網址 (多個網址請以「空格」隔開):")
-        .prompt()
-        .unwrap();
+    // 4. 定義最終儲存與暫存目錄
+    let final_download_dir = args
+        .output
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            if config.download_dir.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&config.download_dir))
+            }
+        })
+        .unwrap_or_else(|| dirs::download_dir().expect("找不到系統下載目錄"));
 
-    let urls: Vec<String> = url_input
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-
-    if urls.is_empty() {
-        eprintln!("❌ 錯誤：未輸入任何網址。");
-        std::process::exit(1);
-    }
-
-    let category_options = vec![
-        "🎵 下載純音訊 (自動提取與轉檔)",
-        "🎬 下載有聲影片 (自動合併最高畫質與音質)",
-        "🔕 下載純影片 (無聲素材)",
-    ];
-
-    let selected_category = Select::new("請選擇您要下載的媒體類型：", category_options)
-        .prompt()
-        .unwrap();
-
-    let mut base_args: Vec<String> = Vec::new();
-
-    if selected_category.starts_with("🎵") {
-        let audio_options = vec![
-            DownloadOption {
-                display_name: "MP3 (相容性最高，最常用)",
-                args: vec!["-x", "--audio-format", "mp3"],
-            },
-            DownloadOption {
-                display_name: "M4A (Apple 裝置與 iTunes 推薦)",
-                args: vec!["-x", "--audio-format", "m4a"],
-            },
-        ];
-        let selected_audio = Select::new("請選擇目標音訊格式：", audio_options)
-            .prompt()
-            .unwrap();
-        base_args.extend(selected_audio.args.iter().map(|&s| s.to_string()));
-    } else if selected_category.starts_with("🎬") {
-        let video_options = vec![
-            DownloadOption {
-                display_name: "最高畫質 (自動封裝為 MKV 或 WebM)",
-                args: vec!["-f", "bestvideo+bestaudio"],
-            },
-            DownloadOption {
-                display_name: "高相容性 MP4 (自動篩選 MP4 容器格式)",
-                args: vec!["-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]"],
-            },
-        ];
-        let selected_video = Select::new("請選擇目標影片畫質與格式：", video_options)
-            .prompt()
-            .unwrap();
-        base_args.extend(selected_video.args.iter().map(|&s| s.to_string()));
+    let final_tmp_dir = app_config_dir.join(".tmp");
+    let resolved_cookie_dir = if config.cookie_dir.is_empty() {
+        app_config_dir.clone()
     } else {
-        base_args.push("-f".to_string());
-        base_args.push("bestvideo".to_string());
-    }
+        PathBuf::from(&config.cookie_dir)
+    };
 
-    let mut need_subs = false;
-    if !selected_category.starts_with("🎵") {
-        need_subs = Confirm::new("是否需要下載並嵌入字幕 (包含自動生成字幕)？")
-            .with_default(false)
-            .prompt()
-            .unwrap();
-    }
+    // 5. 判斷自動化靜默下載 vs 互動選單輸入
+    let is_silent = args.is_fully_automated();
+    let (input_urls, media_type, target_ext) = if is_silent {
+        (
+            args.url.clone().unwrap(),
+            args.media_type.unwrap() as u8,
+            args.format.clone().unwrap().to_lowercase(),
+        )
+    } else {
+        ui::get_user_input(&args).context("無法取得使用者輸入")?
+    };
 
-    let need_thumbnail = Confirm::new("是否需要將影片封面嵌入為媒體縮圖？")
-        .with_default(true)
-        .prompt()
-        .unwrap();
+    // 6. 循環處理每一個輸入的影片網址
+    for input_url in input_urls {
+        println!("\n▶️ 開始處理網址: {}", input_url);
+        let site_target = parser::extract_site_name(&input_url);
+        
+        // 探測與獲取公開或受限內容
+        let (mut valid_videos, is_playlist, has_restricted) =
+            parser::scan_url(&input_url, args.force_cookie, &site_target)?;
+            
+        // 優先匹配對應平台的專屬沙盒 Cookie
+        let cookie_args = setup::handle_cookies(
+            &site_target,
+            has_restricted,
+            &args.cookie,
+            &resolved_cookie_dir,
+            is_silent,
+        )?;
+        
+        if !cookie_args.is_empty() && is_playlist {
+            valid_videos = parser::rescan_with_cookies(&input_url, &cookie_args, valid_videos.len())?;
+        }
 
-    println!("\n========================================");
-    println!("✅ 設定完成！即將開始並行下載任務...");
-    println!("========================================\n");
+        let final_target_dir =
+            utils::prepare_output_dir(&final_download_dir, &input_url, &cookie_args, is_playlist);
 
-    // --- 多線程並行派發邏輯開始 ---
-    let mut task_handles = Vec::new();
+        // 建立 Markdown 執行日誌
+        LogManager::init_log(&final_target_dir, &input_url);
+        LogManager::log_event(
+            &final_target_dir,
+            "INFO",
+            &format!("掃描完畢，準備下載 {} 個項目", valid_videos.len()),
+        );
 
-    // 針對每一個輸入的網址，產生獨立的設定檔與暫存目錄
-    for (idx, url) in urls.into_iter().enumerate() {
-        // 呼叫我們剛剛在 config.rs 寫好的安全隔離暫存目錄產生器
-        let temp_dir = config_manager
-            .create_isolated_tmp_dir(idx)
-            .expect("無法建立任務暫存目錄");
+        let dl_args = utils::build_download_args(media_type, &target_ext, &input_url, &cookie_args);
+        setup_download_options(
+            &mut valid_videos,
+            &cookie_args,
+            is_silent,
+            media_type,
+            &target_ext,
+        );
 
-        let task_config = AppConfig {
-            urls: vec![url], // 讓這個任務專心下載它負責的這一個網址
-            base_args: base_args.clone(),
-            need_subs,
-            need_thumbnail,
-            download_dir: final_download_dir.clone(),
-            temp_dir: temp_dir.to_string_lossy().to_string(),
+        let mut current_cookie_args = cookie_args;
+        let mut session = proc::DownloadSession {
+            pending_videos: valid_videos,
+            failed_videos: Vec::new(),
         };
 
-        // 將任務丟進 tokio 執行緒池中並行處理
-        let handle = tokio::spawn(async move {
-            executor::execute_download(task_config).await;
-        });
+        // 🌟 初始化動態排除黑名單與重試安全防禦控制
+        let mut attempted_browsers: Vec<String> = Vec::new();
+        let mut retry_count = 0;
+        const MAX_RETRIES: u32 = 3; // 實體防死鎖臨界上限
 
-        task_handles.push(handle);
+        // 7. 啟動非同步並行下載與錯誤恢復重試迴圈
+        loop {
+            if session.pending_videos.is_empty() {
+                break;
+            }
+            if retry_count >= MAX_RETRIES {
+                println!("\n⚠️ 已達到下載重試上限 ({} 次)，自動終止任務以防止死鎖與網絡資源鎖定。", MAX_RETRIES);
+                LogManager::log_event(
+                    &final_target_dir,
+                    "ERROR",
+                    &format!("已達到下載重試上限 ({} 次)，自動終止任務", MAX_RETRIES),
+                );
+                break;
+            }
+
+            // 執行當前 Session 的下載與 ffmpeg 封裝
+            let failed_tasks = proc::execute_download_session(
+                session,
+                is_playlist,
+                media_type,
+                target_ext.clone(),
+                dl_args.clone(),
+                current_cookie_args.clone(),
+                final_target_dir.clone(),
+                final_tmp_dir.clone(),
+                config.max_concurrent_downloads,
+            )
+            .await?;
+
+            if failed_tasks.is_empty() {
+                break; // 下載全部成功，安全退出
+            }
+
+            // 提取下載失敗的 Video 項目
+            let failed_videos: Vec<parser::VideoItem> = failed_tasks.iter().map(|t| t.video.clone()).collect();
+            
+            // 檢查是否包含因登入/權限/年齡限制引起的 AuthError
+            let has_auth_error = failed_tasks.iter().any(|t| {
+                matches!(t.error, Some(proc::DLMediaError::AuthError(_)))
+            });
+
+            LogManager::log_event(
+                &final_target_dir,
+                "WARN",
+                &format!(
+                    "本次批次下載未完全成功，共 {} 個項目下載失敗 (是否存在權限問題: {})",
+                    failed_tasks.len(),
+                    has_auth_error
+                ),
+            );
+
+            // 在自動化/靜默下載模式下，不進行交互式恢復
+            if is_silent {
+                println!("⚠️ 全自動靜默模式下發現失敗項目，拒絕彈出選單，中斷流程。");
+                break;
+            }
+
+            // 8. 進入精準錯誤攔截恢復 TUI 選單
+            if has_auth_error {
+                retry_count += 1;
+                match ui::prompt_error_recovery(failed_tasks.len()) {
+                    ui::ErrorRecoveryChoice::Browser => {
+                        // 載入自訂瀏覽器配置列表
+                        let mut active_browsers = config.preferred_browsers.clone();
+                        
+                        // 跨平台過濾：Safari 只在 macOS 可用
+                        #[cfg(not(target_os = "macos"))]
+                        active_browsers.retain(|b| b != "safari");
+
+                        // 核心防禦：動態排除已嘗試失敗的瀏覽器 (黑名單排除)
+                        active_browsers.retain(|b| !attempted_browsers.contains(b));
+
+                        if active_browsers.is_empty() {
+                            println!("\n❌ 您的配置列表內所有可用瀏覽器的 Cookie 皆已嘗試且全部失效。");
+                            LogManager::log_event(
+                                &final_target_dir,
+                                "WARN",
+                                "自訂瀏覽器列表皆已嘗試失效，安全引導降級至手動 Cookie 匯入"
+                            );
+                            
+                            // 安全降級引導：手動放入 cookie_site.txt 檔案
+                            let new_cookie = setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
+                            if new_cookie.is_empty() {
+                                LogManager::log_event(&final_target_dir, "WARN", "使用者未提供有效手動 Cookie，放棄重試");
+                                break;
+                            }
+                            current_cookie_args = new_cookie;
+                        } else if active_browsers.len() == 1 {
+                            // 🌟 一鍵自動繞過：若僅配置或僅剩一個瀏覽器，自動跳過 TUI 選擇直接套用
+                            let single_browser = active_browsers[0].clone();
+                            println!("\n⚡ 偵測到可用的瀏覽器列表僅剩一組，自動套用 [{}] 瀏覽器 Cookie 進行重試...", single_browser);
+                            LogManager::log_event(
+                                &final_target_dir,
+                                "INFO",
+                                &format!("瀏覽器僅剩一組，自動繞過選單套用 {}", single_browser)
+                            );
+                            attempted_browsers.push(single_browser.clone());
+                            current_cookie_args = vec!["--cookies-from-browser".into(), single_browser];
+                        } else {
+                            // 彈出經過排除過濾後的動態瀏覽器選單
+                            let browser = ui::select_browser(&active_browsers);
+                            LogManager::log_event(
+                                &final_target_dir,
+                                "INFO",
+                                &format!("使用者手動選擇：自動套用 {} 瀏覽器 Cookie 進行重試", browser),
+                            );
+                            attempted_browsers.push(browser.clone());
+                            current_cookie_args = vec!["--cookies-from-browser".into(), browser];
+                        }
+
+                        // 重組失敗項目為 pending 並刷新 Session 重啟
+                        session = proc::DownloadSession {
+                            pending_videos: failed_videos,
+                            failed_videos: Vec::new(),
+                        };
+                        println!("🔄 正在套用新 Cookie 重新嘗試下載...");
+                    }
+                    ui::ErrorRecoveryChoice::Manual => {
+                        let new_cookie = setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
+                        if new_cookie.is_empty() {
+                            LogManager::log_event(&final_target_dir, "WARN", "使用者未提供有效手動 Cookie，終止重試");
+                            println!("❌ 未提供有效的 Cookie，放棄重試。");
+                            break;
+                        }
+                        current_cookie_args = new_cookie;
+                        LogManager::log_event(&final_target_dir, "INFO", "使用者選擇：手動匯入 Cookie 進行重試");
+                        
+                        session = proc::DownloadSession {
+                            pending_videos: failed_videos,
+                            failed_videos: Vec::new(),
+                        };
+                        println!("🔄 正在使用手動 Cookie 重新嘗試下載...");
+                    }
+                    ui::ErrorRecoveryChoice::Abort => {
+                        LogManager::log_event(&final_target_dir, "INFO", "使用者選擇：放棄失敗項目並結束");
+                        println!("👋 已放棄失敗項目。");
+                        break;
+                    }
+                }
+            } else {
+                // 原地重新嘗試：非 Auth 類引起的網路斷連波動，允許直接進行原參數重試
+                retry_count += 1;
+                println!("\n⚠️ 偵測到非權限引起的網路錯誤（如 Socket 逾時），自動進行原地重新嘗試 ({}/{})", retry_count, MAX_RETRIES);
+                LogManager::log_event(
+                    &final_target_dir,
+                    "INFO",
+                    &format!("原地重新下載重試 ({}/{})", retry_count, MAX_RETRIES)
+                );
+                session = proc::DownloadSession {
+                    pending_videos: failed_videos,
+                    failed_videos: Vec::new(),
+                };
+            }
+        }
     }
-
-    // 等待所有線程的下載任務都順利結束
-    for handle in task_handles {
-        let _ = handle.await;
-    }
-
-    println!("\n🎉 恭喜！所有下載任務已順利完成！");
+    Ok(())
 }
