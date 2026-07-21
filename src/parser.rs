@@ -56,13 +56,13 @@ pub fn extract_site_name(url: &str) -> String {
         .to_string()
 }
 
-/// 🔍 掃描目標網址，輕量解析出是否為播放清單、包含哪些影片項目，以及是否需要登入 Cookie
+/// 掃描目標網址，輕量解析出是否為播放清單、包含哪些影片項目，以及是否需要登入 Cookie
 pub fn scan_url(
     input_url: &str,
     force_cookie: bool,
     site_target: &str,
 ) -> Result<(Vec<VideoItem>, bool, bool)> {
-    println!("🔍 正在分析網址資訊...");
+    println!("正在分析網址資訊...");
     
     let output = Command::new("yt-dlp")
         .args([
@@ -140,13 +140,13 @@ pub fn scan_url(
     Ok((valid_videos, is_playlist, has_restricted))
 }
 
-/// 🔄 當套用 Cookie 後，重新對網址進行深度掃描，用以解鎖先前被隱藏或會員專屬的影片項目
+/// 當套用 Cookie 後，重新對網址進行深度掃描，用以解鎖先前被隱藏或會員專屬的影片項目
 pub fn rescan_with_cookies(
     input_url: &str,
     cookie_args: &[String],
     original_total: usize,
 ) -> Result<Vec<VideoItem>> {
-    println!("🔄 正在透過 Cookie 驗證並重新掃描清單...");
+    println!("正在透過 Cookie 驗證並重新掃描清單...");
     
     let output = Command::new("yt-dlp")
         .args(cookie_args)
@@ -208,9 +208,9 @@ pub fn rescan_with_cookies(
 /// 📊 在終端機中印出網址前置分析的統計簡報，幫助用戶確認目前掃描狀態
 fn print_analysis_report(site: &str, is_pl: bool, count: usize, restricted: bool, forced: bool) {
     println!("--------------------------------------------------");
-    println!("📡 來源網站：{}", site);
+    println!("來源網站：{}", site);
     println!(
-        "📋 內容類型：{}",
+        "內容類型：{}",
         if is_pl {
             format!("【播放清單】(包含 {} 部內容)", count)
         } else {
@@ -218,13 +218,13 @@ fn print_analysis_report(site: &str, is_pl: bool, count: usize, restricted: bool
         }
     );
     let status = if forced {
-        "⚠️ 強制調用 Cookie 模式"
+        "強制調用 Cookie 模式"
     } else if restricted {
-        "⚠️ 偵測到限制/高畫質內容 (需要 Cookie 解鎖)"
+        "偵測到限制/高畫質內容 (需要 Cookie 解鎖)"
     } else {
-        "🔓 公開內容"
+        "公開內容"
     };
-    println!("🔒 權限狀態：{}", status);
+    println!("權限狀態：{}", status);
     println!("--------------------------------------------------");
 }
 

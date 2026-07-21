@@ -1,27 +1,27 @@
 use clap::{Parser, ValueEnum};
 use clap_complete::Shell;
 
-/// 🎬 媒體下載類型定義
+/// 媒體下載類型定義
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum MediaType {
-    /// 🎧 純音訊下載
+    /// 純音訊下載
     #[value(alias = "1")]
     Audio = 1,
-    /// 🔕 無聲影片下載
+    /// 無聲影片下載
     #[value(alias = "2")]
     VideoOnly = 2,
-    /// 🎥 有聲影片下載 (最高畫質合併)
+    /// 有聲影片下載 (最高畫質合併)
     #[value(alias = "3")]
     Video = 3,
 }
 
-/// 🚀 dl-media - 萬能終端機影音與彈幕下載器 (TUI / CLI 雙模)
+/// yt-dlp-tui - 萬能終端機影音與彈幕下載器 (TUI / CLI 雙模)
 #[derive(Parser, Debug)]
 #[command(
-    name = "dl-media",
+    name = "yt-dlp-tui",
     version,
     about = "簡化 yt-dlp 複雜參數的雙模下載器，自動合併多國字幕與 Bilibili 彈幕，並支援自動 Cookie 重試。",
-    long_about = "dl-media 是一個為大眾與進階使用者設計的影音下載工具。它在未提供完整參數時會自動開啟直覺、友善的互動選單 (TUI)；在提供網址、類型、格式參數時，則進入完全自動化的靜默指令模式，非常適合用於排程指令碼 (Cron job) 或自動化腳本。"
+    long_about = "yt-dlp-tui 是一個為大眾與進階使用者設計的影音下載工具。它在未提供完整參數時會自動開啟直覺、友善的互動選單 (TUI)；在提供網址、類型、格式參數時，則進入完全自動化的靜默指令模式，非常適合用於排程指令碼 (Cron job) 或自動化腳本。"
 )]
 pub struct Args {
     /// 貼上要下載的影片或播放清單網址 (支援多個，以空格隔開)
@@ -75,7 +75,7 @@ impl Args {
                 MediaType::Audio => {
                     if fmt != "mp3" && fmt != "m4a" {
                         anyhow::bail!(
-                            "❌ 參數不匹配：當下載類型為【🎧 音訊】時，格式只能指定為 mp3 或 m4a，不支援「{}」。",
+                            "❌ 參數不匹配：當下載類型為【音訊】時，格式只能指定為 mp3 或 m4a，不支援「{}」。",
                             fmt
                         );
                     }
@@ -83,7 +83,7 @@ impl Args {
                 _ => {
                     if fmt != "mp4" && fmt != "mkv" {
                         anyhow::bail!(
-                            "❌ 參數不匹配：當下載類型為【🎥 影片】時，格式只能指定為 mp4 或 mkv，不支援「{}」。",
+                            "❌ 參數不匹配：當下載類型為【影片】時，格式只能指定為 mp4 或 mkv，不支援「{}」。",
                             fmt
                         );
                     }

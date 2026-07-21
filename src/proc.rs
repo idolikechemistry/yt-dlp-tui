@@ -24,7 +24,7 @@ pub enum DLMediaError {
     NetworkError(String),
     /// 📂 檔案下載完成但損毀或遺失
     FileCorruption(String),
-    /// ⚠️ 未知或非預期錯誤
+    /// 未知或非預期錯誤
     Unknown(String),
 }
 
@@ -47,7 +47,7 @@ impl LogManager {
         let log_path = target_dir.join("download_session.md");
         if !log_path.exists() {
             let header = format!(
-                "# dl-media 任務執行紀錄\n\n**目標網址**：`{}`\n**啟動時間**：{}\n\n### 執行軌跡\n\n",
+                "# yt-dlp-tui 任務執行紀錄\n\n**目標網址**：`{}`\n**啟動時間**：{}\n\n### 執行軌跡\n\n",
                 target_url,
                 Local::now().format("%Y-%m-%d %H:%M:%S")
             );
@@ -182,7 +182,7 @@ pub async fn merge_subs_and_danmaku(
                     "und".to_string()
                 };
                 let (iso_lang, display_title) = match raw_lang.as_str() {
-                    "zh-Hant" | "zh-TW" | "zh-HK" => ("chi", "繁體中文"),
+                    "zh-Hant" | "zh-TW" | "zh-HK" => ("chi", "正體中文"),
                     "zh-Hans" | "zh-CN" | "zh" => ("zho", "簡體中文"),
                     "en" | "en-US" | "en-GB" => ("eng", "English"),
                     "ja" => ("jpn", "日本語"),
@@ -330,7 +330,7 @@ async fn execute_task(
             current_dl_args[f_idx + 1] = format!("{}+bestaudio/best", vid_id);
         }
     } else if task.media_type != 1 && task.target_ext == "mp4" {
-        pb.println("📌 採用 MP4：自動下載最高相容畫質。");
+        pb.println("採用 MP4：自動下載最高相容畫質。");
     }
     
     let tmp_output_template = format!("{}/tmp_{}.%(ext)s", session_tmp_dir.to_string_lossy(), ts);
@@ -473,7 +473,7 @@ async fn execute_task(
             final_res_info = get_video_resolution(&final_path).map_or("".into(), |r| format!(" [畫質: {}]", r));
         }
         
-        pb.println(format!("✅ 儲存成功：{}{}", final_name, final_res_info));
+        pb.println(format!("儲存成功：{}{}", final_name, final_res_info));
         pb.finish_and_clear();
         
         LogManager::log_event(
@@ -493,7 +493,7 @@ async fn execute_task(
             LogManager::log_event(&task.target_dir, "ERROR", &e.to_string());
         }
         
-        pb.println(format!("⚠️ 下載失敗：{}", task.video.title));
+        pb.println(format!("下載失敗：{}", task.video.title));
         pb.finish_and_clear();
     }
     

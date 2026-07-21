@@ -15,7 +15,7 @@ use std::process;
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 dl-media v{}", env!("CARGO_PKG_VERSION"));
+    println!("yt-dlp-tui v{}", env!("CARGO_PKG_VERSION"));
     if let Err(e) = run().await {
         eprintln!("\n❌ [執行錯誤]: {}", e);
         for cause in e.chain().skip(1) {
@@ -37,7 +37,7 @@ fn setup_download_options(
         return;
     }
     for video in videos.iter_mut() {
-        println!("⏳ 正在獲取 {} 的可選設定...", video.title);
+        println!("正在獲取 {} 的可選設定...", video.title);
         if let Ok(info) = parser::probe_video_info(&video.url, cookie_args) {
             video.chosen_langs = ui::select_subtitles(&info.langs);
             if media_type != 1 && target_ext == "mkv" {
@@ -45,7 +45,7 @@ fn setup_download_options(
             }
             video.metadata = Some(info);
         } else {
-            println!("⚠️ 無法獲取 {} 的進階資訊，將使用預設參數。", video.title);
+            println!("無法獲取 {} 的進階資訊，將使用預設參數。", video.title);
         }
     }
 }
@@ -108,7 +108,7 @@ async fn run() -> Result<()> {
 
     // 6. 循環處理每一個輸入的影片網址
     for input_url in input_urls {
-        println!("\n▶️ 開始處理網址: {}", input_url);
+        println!("\n開始處理網址: {}", input_url);
         let site_target = parser::extract_site_name(&input_url);
         
         // 探測與獲取公開或受限內容
@@ -151,7 +151,7 @@ async fn run() -> Result<()> {
         let mut current_cookie_args = cookie_args;
         let mut session = proc::DownloadSession {
             pending_videos: valid_videos,
-            failed_videos: Vec::new(),
+            failed_tasks: Vec::new(),
         };
 
         // 🌟 初始化動態排除黑名單與重試安全防禦控制
@@ -165,7 +165,7 @@ async fn run() -> Result<()> {
                 break;
             }
             if retry_count >= MAX_RETRIES {
-                println!("\n⚠️ 已達到下載重試上限 ({} 次)，自動終止任務以防止死鎖與網絡資源鎖定。", MAX_RETRIES);
+                println!("\n已達到下載重試上限 ({} 次)，自動終止任務以防止死鎖與網絡資源鎖定。", MAX_RETRIES);
                 LogManager::log_event(
                     &final_target_dir,
                     "ERROR",
@@ -197,7 +197,7 @@ async fn run() -> Result<()> {
             
             // 檢查是否包含因登入/權限/年齡限制引起的 AuthError
             let has_auth_error = failed_tasks.iter().any(|t| {
-                matches!(t.error, Some(proc::DLMediaError::AuthError(_)))
+                matches!(t.error, proc::DLMediaError::AuthError(_))
             });
 
             LogManager::log_event(
@@ -212,7 +212,7 @@ async fn run() -> Result<()> {
 
             // 在自動化/靜默下載模式下，不進行交互式恢復
             if is_silent {
-                println!("⚠️ 全自動靜默模式下發現失敗項目，拒絕彈出選單，中斷流程。");
+                println!("全自動靜默模式下發現失敗項目，拒絕彈出選單，中斷流程。");
                 break;
             }
 
@@ -272,9 +272,9 @@ async fn run() -> Result<()> {
                         // 重組失敗項目為 pending 並刷新 Session 重啟
                         session = proc::DownloadSession {
                             pending_videos: failed_videos,
-                            failed_videos: Vec::new(),
+                            failed_tasks: Vec::new(),
                         };
-                        println!("🔄 正在套用新 Cookie 重新嘗試下載...");
+                        println!("正在套用新 Cookie 重新嘗試下載...");
                     }
                     ui::ErrorRecoveryChoice::Manual => {
                         let new_cookie = setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
@@ -288,9 +288,9 @@ async fn run() -> Result<()> {
                         
                         session = proc::DownloadSession {
                             pending_videos: failed_videos,
-                            failed_videos: Vec::new(),
+                            failed_tasks: Vec::new(),
                         };
-                        println!("🔄 正在使用手動 Cookie 重新嘗試下載...");
+                        println!("正在使用手動 Cookie 重新嘗試下載...");
                     }
                     ui::ErrorRecoveryChoice::Abort => {
                         LogManager::log_event(&final_target_dir, "INFO", "使用者選擇：放棄失敗項目並結束");
@@ -301,7 +301,7 @@ async fn run() -> Result<()> {
             } else {
                 // 原地重新嘗試：非 Auth 類引起的網路斷連波動，允許直接進行原參數重試
                 retry_count += 1;
-                println!("\n⚠️ 偵測到非權限引起的網路錯誤（如 Socket 逾時），自動進行原地重新嘗試 ({}/{})", retry_count, MAX_RETRIES);
+                println!("\n偵測到非權限引起的網路錯誤（如 Socket 逾時），自動進行原地重新嘗試 ({}/{})", retry_count, MAX_RETRIES);
                 LogManager::log_event(
                     &final_target_dir,
                     "INFO",
@@ -309,7 +309,7 @@ async fn run() -> Result<()> {
                 );
                 session = proc::DownloadSession {
                     pending_videos: failed_videos,
-                    failed_videos: Vec::new(),
+                    failed_tasks: Vec::new(),
                 };
             }
         }

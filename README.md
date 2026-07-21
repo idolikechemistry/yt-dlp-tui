@@ -1,4 +1,4 @@
-# 🚀 yt-dlp-tui
+# yt-dlp-tui
 
 **yt-dlp-tui** 是一款為終端機使用者設計的現代化、極致效能影音下載與封裝工具 [6]。它完美融合了 `yt-dlp` 的強大下載能力與 `ffmpeg` 的專業後處理封裝技術，並具備優雅的命令列（CLI）自動化參數與直覺的一體化終端選單（TUI）雙核心模式 [6]。
 
@@ -49,24 +49,24 @@
 ### macOS (推薦 Homebrew)
 ```bash
 # 新增倉庫並安裝
-brew tap idolikechemistry/dl-media && brew install idolikechemistry/dl-media/dl-media
+brew tap idolikechemistry/yt-dlp-tui && brew install idolikechemistry/yt-dlp-tui/yt-dlp-tui
 
 # 日後更新
-brew upgrade dl-media
+brew upgrade yt-dlp-tui
 
 # 解除安裝
-brew uninstall dl-media && brew untap idolikechemistry/dl-media
+brew uninstall yt-dlp-tui && brew untap idolikechemistry/yt-dlp-tui
 ```
 
 ### Linux
 ```bash
 # 一鍵下載二進位檔並賦予權限
-curl -L "https://github.com/idolikechemistry/dl-media/releases/latest/download/dl-media-linux-x64" -o dl-media && chmod +x dl-media && sudo mv dl-media /usr/local/bin/
+curl -L "https://github.com/idolikechemistry/yt-dlp-tui/releases/latest/download/yt-dlp-tui-linux-x64" -o yt-dlp-tui && chmod +x yt-dlp-tui && sudo mv yt-dlp-tui /usr/local/bin/
 ```
-*(Mac 晶片使用者亦可手動將 `dl-media-linux-x64` 替換為 `dl-media-mac-arm64` 執行同等安裝)*
+*(Mac 晶片使用者亦可手動將 `yt-dlp-tui-linux-x64` 替換為 `yt-dlp-tui-mac-arm64` 執行同等安裝)*
 
 ### Windows
-1. 請前往 [Releases](https://github.com/idolikechemistry/dl-media/releases) 頁面下載最新的 `dl-media-windows-x64.exe` 。
+1. 請前往 [Releases](https://github.com/idolikechemistry/yt-dlp-tui/releases) 頁面下載最新的 `yt-dlp-tui-windows-x64.exe` 。
 2. 將其手動放置於您慣用的資料夾中（建議加入系統環境變數 `Path` 以便在任一 CMD/PowerShell 視窗直接呼叫）。
 
 ---
@@ -89,11 +89,11 @@ curl -L "https://github.com/idolikechemistry/dl-media/releases/latest/download/d
 
 ## ⚙️ 偏好設定 (`config.toml`)
 
-開啟終端機執行 `dl-media --open-config`，系統會自動在檔案管理器中為您開啟設定目錄。您可以使用任何文字編輯器編輯 `config.toml`：
+開啟終端機執行 `yt-dlp-tui --open-config`，系統會自動在檔案管理器中為您開啟設定目錄。您可以使用任何文字編輯器編輯 `config.toml`：
 
 ```toml
 # ======================================================
-# dl-media 使用者設定檔
+# yt-dlp-tui 使用者設定檔
 # ======================================================
 # 💡 提示：本檔案在版本更新時會自動重構結構並保留自訂參數。
 
@@ -121,9 +121,9 @@ version = "0.3.0"
 ```
 
 ### 📁 設定檔預設儲存路徑
-* **Windows**：`%APPDATA%\dl-media\`
-* **macOS**：`~/Library/Application Support/dl-media/`
-* **Linux**：`~/.config/dl-media/`
+* **Windows**：`%APPDATA%\yt-dlp-tui\`
+* **macOS**：`~/Library/Application Support/yt-dlp-tui/`
+* **Linux**：`~/.config/yt-dlp-tui/`
 
 ---
 
@@ -146,14 +146,14 @@ version = "0.3.0"
 
 ```bash
 # 1. 複製倉庫
-git clone https://github.com/idolikechemistry/dl-media.git
-cd dl-media
+git clone https://github.com/idolikechemistry/yt-dlp-tui.git
+cd yt-dlp-tui
 
 # 2. 編譯 Release 版本 (已優化執行效能與體積)
 cargo build --release
 
 # 3. 執行編譯後的程式
-./target/release/dl-media
+./target/release/yt-dlp-tui
 ```
 
 ---
