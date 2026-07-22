@@ -132,4 +132,4 @@ cargo build --release
 
 ## License
 
-本專案採用 **[MIT License](LICENSE)** 授權。
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
