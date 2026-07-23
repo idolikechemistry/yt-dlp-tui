@@ -5,7 +5,7 @@
 # =====================================================================
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/idolikechemistry/yt-dlp-tui/main/install.sh | bash
+#   curl -fsSL https://github.com/idolikechemistry/yt-dlp-tui/blob/main/install.sh | bash
 #
 # Supported Platforms:
 #   - macOS (Apple Silicon: aarch64-apple-darwin)
