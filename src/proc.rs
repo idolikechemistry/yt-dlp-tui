@@ -6,11 +6,11 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as AsyncCommand;
-use tokio::sync::{Semaphore, Mutex};
+use tokio::sync::Semaphore;
 
 // =====================================================================
 // 1. 錯誤處理與日誌系統 (精準分類錯誤，對接動態排除重試邏輯)
@@ -39,12 +39,24 @@ impl std::fmt::Display for DLMediaError {
     }
 }
 
+// 🎯 全域靜態鎖，用以儲存本批次任務派發時建立的動態日誌檔名
+static CURRENT_LOG_NAME: Mutex<Option<String>> = Mutex::new(None);
+
 pub struct LogManager;
 
 impl LogManager {
-    /// 初始化 Markdown 報表標頭
+    /// 初始化 Markdown 報表標頭（動態加入任務派發時的時間戳）
     pub fn init_log(target_dir: &Path, target_url: &str) {
-        let log_path = target_dir.join("download_session.md");
+        // 以下載任務派發時的時間為準
+        let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let filename = format!("download_session-{}.md", ts);
+
+        // 將此檔名安全地登記到全域變數中
+        if let Ok(mut guard) = CURRENT_LOG_NAME.lock() {
+            *guard = Some(filename.clone());
+        }
+
+        let log_path = target_dir.join(&filename);
         if !log_path.exists() {
             let header = format!(
                 "# yt-dlp-tui 任務執行紀錄\n\n**目標網址**：`{}`\n**啟動時間**：{}\n\n### 執行軌跡\n\n",
@@ -55,9 +67,20 @@ impl LogManager {
         }
     }
 
+    /// 取得當前工作階段的日誌檔名，若全域變數未初始化則退回預設值
+    pub fn get_log_filename() -> String {
+        if let Ok(guard) = CURRENT_LOG_NAME.lock() {
+            if let Some(ref name) = *guard {
+                return name.clone();
+            }
+        }
+        "download_session.md".to_string()
+    }
+
     /// 寫入標準 Markdown 格式的單行日誌
     pub fn log_event(target_dir: &Path, level: &str, msg: &str) {
-        let log_path = target_dir.join("download_session.md");
+        let filename = Self::get_log_filename();
+        let log_path = target_dir.join(&filename);
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
         let entry = format!("* **[{}]** [{}] {}\n", ts, level, msg);
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
@@ -94,7 +117,6 @@ pub struct DownloadTask {
 #[derive(Clone)]
 pub struct FailedTask {
     pub video: VideoItem,
-    pub error: DLMediaError,
 }
 
 pub struct TaskResult {
@@ -203,7 +225,6 @@ pub async fn merge_subs_and_danmaku(
     }
     sub_files.sort_by(|a, b| a.1.cmp(&b.1));
     let total_duration = get_video_duration(video_path).await.unwrap_or(1.0);
-    
     let mut cmd = AsyncCommand::new("ffmpeg");
     cmd.arg("-loglevel").arg("error");
     cmd.arg("-hide_banner");
@@ -231,7 +252,6 @@ pub async fn merge_subs_and_danmaku(
     }
     cmd.arg("-y").arg(final_path);
     cmd.stdout(Stdio::piped());
-    
     if let Ok(mut child) = cmd.spawn() {
         if let Some(stdout) = child.stdout.take() {
             let mut reader = BufReader::new(stdout).lines();
@@ -285,17 +305,14 @@ async fn execute_task(
 ) -> TaskResult {
     let permit = semaphore.acquire_owned().await.unwrap();
     let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    
     // 建立極致安全的隔離沙盒資料夾
     let session_tmp_dir = task.tmp_dir.join(format!("{}_pid{}_{}", ts, std::process::id(), idx));
     let _ = fs::create_dir_all(&session_tmp_dir);
-    
     LogManager::log_event(
         &task.target_dir,
         "INFO",
         &format!("開始處理任務：{}", task.video.title),
     );
-    
     let safe_title = task.video.title.replace(&['/', '\\', ':', '*', '?', '"', '<', '>', '|'][..], "_");
     let final_name = if task.is_playlist {
         format!("{:02}-{}_{}.{}", idx + 1, safe_title, ts, task.target_ext)
@@ -303,7 +320,6 @@ async fn execute_task(
         format!("{}_{}.{}", safe_title, ts, task.target_ext)
     };
     let final_path = task.target_dir.join(&final_name);
-    
     let pb = multi_progress.add(ProgressBar::new(100));
     pb.set_style(
         ProgressStyle::with_template(
@@ -314,9 +330,7 @@ async fn execute_task(
     );
     pb.set_prefix(format!("[{}/{}]", idx + 1, total));
     pb.set_message("準備下載...");
-    
     let mut current_dl_args = task.dl_args.clone();
-    
     // 注入使用者選擇的字幕/語言參數
     if !task.video.chosen_langs.is_empty() {
         current_dl_args.push("--write-subs".into());
@@ -324,7 +338,6 @@ async fn execute_task(
         current_dl_args.push("--sub-langs".into());
         current_dl_args.push(task.video.chosen_langs.join(","));
     }
-    
     if let Some(ref vid_id) = task.video.chosen_format {
         if let Some(f_idx) = current_dl_args.iter().position(|x| x == "-f") {
             current_dl_args[f_idx + 1] = format!("{}+bestaudio/best", vid_id);
@@ -332,15 +345,12 @@ async fn execute_task(
     } else if task.media_type != 1 && task.target_ext == "mp4" {
         pb.println("採用 MP4：自動下載最高相容畫質。");
     }
-    
     let tmp_output_template = format!("{}/tmp_{}.%(ext)s", session_tmp_dir.to_string_lossy(), ts);
     current_dl_args.push("-o".into());
     current_dl_args.push(tmp_output_template);
     current_dl_args.push(task.video.url.clone());
-    
     let mut debug_args = current_dl_args.clone();
     debug_args.retain(|arg| arg != "--no-warnings");
-    
     let mut child = AsyncCommand::new("yt-dlp")
         .current_dir(&session_tmp_dir)
         .args(&task.cookie_args)
@@ -349,11 +359,9 @@ async fn execute_task(
         .stderr(Stdio::piped())
         .spawn()
         .expect("執行 yt-dlp 失敗");
-        
     let target_dir_clone = task.target_dir.clone();
-    let stderr_accumulator = Arc::new(Mutex::new(String::new()));
+    let stderr_accumulator = Arc::new(tokio::sync::Mutex::new(String::new()));
     let stderr_accum_clone = Arc::clone(&stderr_accumulator);
-    
     // 1. Stdout 監聽線程 (進度條解析)
     if let Some(stdout) = child.stdout.take() {
         let pb_clone = pb.clone();
@@ -371,7 +379,6 @@ async fn execute_task(
             }
         });
     }
-    
     // 2. Stderr 監聽線程 (日誌與精準錯誤分類累積)
     if let Some(stderr) = child.stderr.take() {
         let dir_clone = target_dir_clone.clone();
@@ -385,12 +392,10 @@ async fn execute_task(
             }
         });
     }
-    
     let status = child.wait().await.unwrap_or_else(|_| panic!("等待 yt-dlp 失敗"));
     let mut success = false;
     let mut error = None;
     let mut downloaded_path_str = String::new();
-    
     if status.success() {
         if let Ok(entries) = fs::read_dir(&session_tmp_dir) {
             for entry in entries.flatten() {
@@ -410,7 +415,6 @@ async fn execute_task(
     } else {
         // 🎯 核心重構：讀取 stderr 累積器進行精準錯誤識別
         let err_content = stderr_accumulator.lock().await.to_lowercase();
-        
         let is_auth_issue = err_content.contains("sign in")
             || err_content.contains("login")
             || err_content.contains("cookie")
@@ -418,7 +422,6 @@ async fn execute_task(
             || err_content.contains("private")
             || err_content.contains("age-restricted")
             || err_content.contains("403");
-            
         if is_auth_issue {
             error = Some(DLMediaError::AuthError(
                 "偵測到需要帳號登入、Cookie 或年齡驗證限制內容".into(),
@@ -437,7 +440,6 @@ async fn execute_task(
             ));
         }
     }
-    
     let mut final_res_info = String::new();
     if status.success() && !downloaded_path_str.is_empty() {
         let downloaded_file = PathBuf::from(downloaded_path_str);
@@ -450,7 +452,6 @@ async fn execute_task(
         );
         pb.set_position(0);
         pb.set_message("正在執行封裝...");
-        
         let merged = if task.media_type != 1 {
             merge_subs_and_danmaku(
                 &session_tmp_dir,
@@ -463,19 +464,15 @@ async fn execute_task(
         } else {
             false
         };
-        
         if !merged {
             let _ = fs::rename(&downloaded_file, &final_path);
             pb.set_position(100);
         }
-        
         if task.media_type != 1 {
             final_res_info = get_video_resolution(&final_path).map_or("".into(), |r| format!(" [畫質: {}]", r));
         }
-        
         pb.println(format!("儲存成功：{}{}", final_name, final_res_info));
         pb.finish_and_clear();
-        
         LogManager::log_event(
             &task.target_dir,
             "SUCCESS",
@@ -488,18 +485,14 @@ async fn execute_task(
                 "下載完成但無法在暫存區定位媒體檔案".into(),
             ));
         }
-        
         if let Some(ref e) = error {
             LogManager::log_event(&task.target_dir, "ERROR", &e.to_string());
         }
-        
         pb.println(format!("下載失敗：{}", task.video.title));
         pb.finish_and_clear();
     }
-    
     cleanup_tmps(&session_tmp_dir);
     drop(permit);
-    
     TaskResult {
         success,
         video: task.video,
@@ -522,11 +515,9 @@ pub async fn execute_download_session(
     let start_time = Instant::now();
     let total = session.pending_videos.len();
     let _ = fs::create_dir_all(&tmp_dir);
-    
     let semaphore = Arc::new(Semaphore::new(max_concurrent as usize));
     let multi_progress = Arc::new(MultiProgress::new());
     let mut handles = vec![];
-    
     for (idx, video) in session.pending_videos.into_iter().enumerate() {
         let task = DownloadTask {
             video,
@@ -544,7 +535,6 @@ pub async fn execute_download_session(
             execute_task(task, sem_clone, mp_clone, total, idx).await
         }));
     }
-    
     let mut success_count = 0;
     for handle in handles {
         if let Ok(result) = handle.await {
@@ -555,25 +545,21 @@ pub async fn execute_download_session(
                 println!("❌ [{}] 失敗原因: {}", result.video.title, err);
                 session.failed_tasks.push(FailedTask {
                     video: result.video,
-                    error: err,
                 });
             }
         }
     }
-    
     let duration = start_time.elapsed();
     let time_str = format!(
         "{} 分 {} 秒",
         duration.as_secs() / 60,
         duration.as_secs() % 60
     );
-    
     crate::ui::print_summary(
         success_count,
         session.failed_tasks.len(),
         &time_str,
         &target_dir.to_string_lossy(),
     );
-    
     Ok(session.failed_tasks)
 }
