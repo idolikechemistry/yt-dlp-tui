@@ -211,7 +211,7 @@ async fn run() -> Result<()> {
         let mut current_cookie_args = cookie_args;
         let mut session = proc::DownloadSession {
             pending_videos: valid_videos,
-            failed_videos: Vec::new(),
+            failed_tasks: Vec::new(), // ✅ 已將欄位修正為 failed_tasks
         };
 
         // =====================================================================
@@ -259,10 +259,12 @@ async fn run() -> Result<()> {
                         if config.preferred_browsers.len() == 1 {
                             config.preferred_browsers[0].clone()
                         } else {
-                            let selection = inquire::Select::new("請選擇您有登入該網站、並想自動提取 Cookie 的瀏覽器：")
-                                .prompt()
-                                .unwrap();
-                            config.preferred_browsers[selection].clone()
+                            inquire::Select::new(
+                                "請選擇您有登入該網站、並想自動提取 Cookie 的瀏覽器：",
+                                config.preferred_browsers.clone(),
+                            )
+                            .prompt()
+                            .unwrap()
                         }
                     } else {
                         ui::select_browser(&config.preferred_browsers)
@@ -275,9 +277,10 @@ async fn run() -> Result<()> {
                         &format!("使用者選擇：自動套用 {} 瀏覽器 Cookie 進行重試", browser),
                     );
 
+                    let failed_items: Vec<parser::VideoItem> = failed_videos.iter().map(|t| t.video.clone()).collect();
                     session = proc::DownloadSession {
-                        pending_videos: failed_videos,
-                        failed_videos: Vec::new(),
+                        pending_videos: failed_items,
+                        failed_tasks: Vec::new(), // ✅ 修正欄位與型別
                     };
                     println!("🔄 正在套用瀏覽器 Cookie 重新嘗試下載...");
                 }
@@ -300,9 +303,10 @@ async fn run() -> Result<()> {
                         "使用者選擇：手動匯入 Cookie 進行重試",
                     );
 
+                    let failed_items: Vec<parser::VideoItem> = failed_videos.iter().map(|t| t.video.clone()).collect();
                     session = proc::DownloadSession {
-                        pending_videos: failed_videos,
-                        failed_videos: Vec::new(),
+                        pending_videos: failed_items,
+                        failed_tasks: Vec::new(), // ✅ 修正欄位與型別
                     };
                     println!("🔄 正在使用手動 Cookie 重新嘗試下載...");
                 }
@@ -318,6 +322,5 @@ async fn run() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }

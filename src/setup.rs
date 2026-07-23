@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use inquire::{Confirm, CustomType, MultiSelect, Select, Text};
 
 /// 1. 檢查系統環境是否具備必要工具
 pub fn check_dependencies() -> Result<()> {
@@ -86,7 +87,6 @@ pub fn get_yt_dlp_supported_browsers() -> Vec<String> {
     match output {
         Ok(out) => {
             let stderr_str = String::from_utf8_lossy(&out.stderr);
-
             // 🎯 同時相容舊版的 "must be one of" 與新版的 "Supported browsers are:" 兩種錯誤格式
             let re = Regex::new(r"(?:must be one of|Supported browsers are:)\s+([a-zA-Z0-9_,\s]+)")
                 .unwrap();
@@ -111,7 +111,6 @@ pub fn get_yt_dlp_supported_browsers() -> Vec<String> {
 
 /// 3. 互動式設定引導 (TUI)
 pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Result<()> {
-    let theme = ColorfulTheme::default();
     loop {
         let dl_dir_display = if config.download_dir.is_empty() {
             "預設 (Downloads)"
@@ -124,7 +123,6 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
             &config.cookie_dir
         };
         let browsers_display = config.preferred_browsers.join(", ");
-
         let options = vec![
             format!("📂 下載存檔路徑 [目前: {}]", dl_dir_display),
             format!("🍪 Cookie 存放路徑 [目前: {}]", ck_dir_display),
@@ -136,23 +134,28 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
             "✅ 儲存並完成退出".to_string(),
         ];
 
-        let selection = Select::with_theme(&theme)
-            .with_prompt("🛠️ yt-dlp-tui 偏好設定引導 (請使用上下鍵選擇項目)")
-            .items(&options)
-            .default(0)
-            .interact()?;
+        let selection = Select::new(
+            "🛠️ yt-dlp-tui 偏好設定引導 (請使用上下鍵選擇項目)",
+            options.clone(),
+        )
+        .prompt()
+        .unwrap_or_else(|_| "✅ 儲存並完成退出".to_string());
 
-        match selection {
+        if selection == "✅ 儲存並完成退出" {
+            break;
+        }
+
+        let selection_idx = options.iter().position(|o| o == &selection).unwrap_or(4);
+        match selection_idx {
             0 => {
                 // 1. 下載存檔路徑
                 println!("\n💡 操作指引：");
                 println!("  1. 我現在會為您開啟資料夾視窗。");
                 println!("  2. 請在視窗中找到目標資料夾，並將其「拖入」此終端機視窗中。");
                 let _ = open_folder(&config_path.parent().unwrap().to_path_buf());
-                let input_path: String = Input::with_theme(&theme)
-                    .with_prompt("📍 請拖入路徑並按下 Enter (留空可還原系統預設)")
-                    .allow_empty(true)
-                    .interact_text()?;
+                let input_path = Text::new("📍 請拖入路徑並按下 Enter (留空可還原系統預設)：")
+                    .prompt()
+                    .unwrap_or_default();
                 let cleaned_path = input_path
                     .trim()
                     .trim_matches('"')
@@ -168,10 +171,9 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                 println!("  1. 我現在會為您開啟資料夾視窗。");
                 println!("  2. 請在視窗中找到目標資料夾，並將其「拖入」此終端機視窗中。");
                 let _ = open_folder(&config_path.parent().unwrap().to_path_buf());
-                let input_path: String = Input::with_theme(&theme)
-                    .with_prompt("📍 請拖入路徑並按下 Enter (留空可還原為程式預設夾)")
-                    .allow_empty(true)
-                    .interact_text()?;
+                let input_path = Text::new("📍 請拖入路徑並按下 Enter (留空可還原為程式預設夾)：")
+                    .prompt()
+                    .unwrap_or_default();
                 let cleaned_path = input_path
                     .trim()
                     .trim_matches('"')
@@ -186,10 +188,10 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                 println!("\n⚠️ 【強烈警告】");
                 println!("設置過高將有極大風險觸發 DDoS 防護，甚至導致您的 IP 被封鎖！");
                 println!("建議一般使用者保持在 1-5 之間。\n");
-                let input_num: u32 = Input::with_theme(&theme)
-                    .with_prompt("請輸入新的最大並行任務數")
-                    .default(config.max_concurrent_downloads)
-                    .interact_text()?;
+                let input_num = CustomType::<u32>::new("請輸入新的最大並行任務數：")
+                    .with_default(config.max_concurrent_downloads)
+                    .prompt()
+                    .unwrap_or(config.max_concurrent_downloads);
                 config.max_concurrent_downloads = input_num;
                 config.save(config_path).context("儲存設定失敗")?;
                 println!("✨ 最大並行下載數變更已成功套用為：{}！\n", input_num);
@@ -206,14 +208,16 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                         "🧹 重設為預設瀏覽器列表 (Chrome, Firefox, Safari, Edge)".to_string(),
                         "↩️ 返回上層偏好設定選單".to_string(),
                     ];
+                    let sub_selection = Select::new("🌐 慣用瀏覽器管理子選單", sub_options.clone())
+                        .prompt()
+                        .unwrap_or_else(|_| "↩️ 返回上層偏好設定選單".to_string());
+                    
+                    if sub_selection == "↩️ 返回上層偏好設定選單" {
+                        break;
+                    }
 
-                    let sub_selection = Select::with_theme(&theme)
-                        .with_prompt("🌐 慣用瀏覽器管理子選單")
-                        .items(&sub_options)
-                        .default(0)
-                        .interact()?;
-
-                    match sub_selection {
+                    let sub_selection_idx = sub_options.iter().position(|o| o == &sub_selection).unwrap_or(3);
+                    match sub_selection_idx {
                         0 => {
                             // A. 勾選啟用
                             if config.preferred_browsers.is_empty() {
@@ -222,25 +226,20 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                                 );
                                 continue;
                             }
-
                             let candidates = config.preferred_browsers.clone();
-                            let defaults = vec![true; candidates.len()];
+                            let defaults: Vec<usize> = (0..candidates.len()).collect();
+                            let chosen_browsers = MultiSelect::new(
+                                "請使用 Space 鍵勾選要啟用的瀏覽器 (Enter 鍵確認)：",
+                                candidates.clone()
+                            )
+                            .with_default(&defaults)
+                            .prompt()
+                            .unwrap_or_default();
 
-                            let chosen_indices = MultiSelect::with_theme(&theme)
-                                .with_prompt("請使用 Space 鍵勾選要啟用的瀏覽器 (Enter 鍵確認)：")
-                                .items(&candidates)
-                                .defaults(&defaults)
-                                .interact()?;
-
-                            let mut new_browsers = Vec::new();
-                            for idx in chosen_indices {
-                                new_browsers.push(candidates[idx].clone());
-                            }
-
-                            if new_browsers.is_empty() {
+                            if chosen_browsers.is_empty() {
                                 println!("⚠️ 警告：必須至少啟用一個瀏覽器！已保留原設定。\n");
                             } else {
-                                config.preferred_browsers = new_browsers;
+                                config.preferred_browsers = chosen_browsers;
                                 config.save(config_path).context("儲存設定失敗")?;
                                 println!("✨ 慣用瀏覽器優先順序已更新！\n");
                             }
@@ -248,13 +247,11 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                         1 => {
                             // B. ➕ 手動新增自訂瀏覽器
                             println!("\n💡 請輸入您的瀏覽器名稱 (必須與 yt-dlp 支援的名單相符，如 brave, opera, vivaldi 等)");
-                            let raw_input: String = Input::with_theme(&theme)
-                                .with_prompt("✍️ 請輸入瀏覽器名稱")
-                                .interact_text()?;
-
+                            let raw_input = Text::new("✍️ 請輸入瀏覽器名稱：")
+                                .prompt()
+                                .unwrap_or_default();
                             // 🎯 安全清洗核心：去空格、強制轉換為全小寫
                             let cleaned_name = raw_input.trim().to_lowercase();
-
                             if cleaned_name.is_empty() {
                                 println!("❌ 輸入無效，瀏覽器名稱不可為空！\n");
                             } else if config.preferred_browsers.contains(&cleaned_name) {
@@ -265,7 +262,6 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                             } else {
                                 // 🎯 核心：透過執行期虛擬探測法動態取得目前最新的白名單！
                                 let yt_dlp_supported = get_yt_dlp_supported_browsers();
-
                                 if yt_dlp_supported.contains(&cleaned_name) {
                                     // 命中已知白名單，直接安全寫入
                                     config.preferred_browsers.push(cleaned_name.clone());
@@ -281,12 +277,10 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                                         "（本機 yt-dlp 支援：{}）",
                                         yt_dlp_supported.join(", ")
                                     );
-
-                                    let force_add = Confirm::with_theme(&theme)
-                                        .with_prompt("您確定要強制將它新增至您的慣用列表嗎？")
-                                        .default(false)
-                                        .interact()?;
-
+                                    let force_add = Confirm::new("您確定要強制將它新增至您的慣用列表嗎？")
+                                        .with_default(false)
+                                        .prompt()
+                                        .unwrap_or(false);
                                     if force_add {
                                         config.preferred_browsers.push(cleaned_name.clone());
                                         config.save(config_path).context("儲存設定失敗")?;
@@ -302,11 +296,11 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                         }
                         2 => {
                             // C. 🧹 重設為官方預設
-                            if Confirm::with_theme(&theme)
-                                .with_prompt("確定要清空當前列表，並恢復為預設的 Chrome/Firefox/Safari/Edge 嗎？")
-                                .default(false)
-                                .interact()?
-                            {
+                            let confirm_reset = Confirm::new("確定要清空當前列表，並恢復為預設的 Chrome/Firefox/Safari/Edge 嗎？")
+                                .with_default(false)
+                                .prompt()
+                                .unwrap_or(false);
+                            if confirm_reset {
                                 config.preferred_browsers = vec![
                                     "chrome".to_string(),
                                     "firefox".to_string(),
@@ -323,10 +317,6 @@ pub fn interactive_config_setup(config_path: &Path, mut config: Config) -> Resul
                         }
                     }
                 }
-            }
-            4 => {
-                // 5. 儲存並完成退出
-                break;
             }
             _ => {}
         }
@@ -354,7 +344,6 @@ pub fn handle_cookies(
     is_silent: bool,
 ) -> Result<Vec<String>> {
     let mut cookie_args = Vec::new();
-
     // 優先權 1：命令列 -c 指定
     if let Some(manual_path_str) = manual_cookie {
         let path = PathBuf::from(manual_path_str);
@@ -365,7 +354,6 @@ pub fn handle_cookies(
             return Ok(cookie_args);
         }
     }
-
     // 優先權 2：設定路徑下的 cookie_site.txt
     let expected_filename = format!("cookie_{}.txt", site_target);
     let target_file = resolved_cookie_dir.join(&expected_filename);
@@ -381,12 +369,11 @@ pub fn handle_cookies(
         let want_to_wait = if is_silent {
             false
         } else {
-            Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("此內容需要權限。是否要現在開啟 Cookie 目錄放入？")
-                .default(true)
-                .interact()?
+            Confirm::new("此內容需要權限。是否要現在開啟 Cookie 目錄放入？")
+                .with_default(true)
+                .prompt()
+                .unwrap_or(false)
         };
-
         if want_to_wait {
             open_folder(resolved_cookie_dir)?;
             println!(
@@ -432,24 +419,19 @@ pub fn wait_for_manual_cookie(
 pub fn check_yt_dlp_update_need(max_age_days: i64) -> Option<String> {
     // 1. 執行 yt-dlp --version 獲取本地版本字串
     let output = Command::new("yt-dlp").arg("--version").output().ok()?;
-
     if !output.status.success() {
         return None;
     }
-
     let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    // 2. 清洗版本號（例如將 "2026.07.16@nightly" 轉為 "2026-07-16"）
+    // 2. 清洗版本號（例如將 \"2026.07.16@nightly\" 轉為 \"2026-07-16\"）
     let raw_date = version_str
         .split('@') // 拔除 @nightly 或 @master 等通道標記
         .next()?
         .replace('.', "-"); // 將點號替換成連字號以利 chrono 解析
-
     // 3. 解析為 NaiveDate 並比對當前日期
     if let Ok(yt_date) = NaiveDate::parse_from_str(&raw_date, "%Y-%m-%d") {
         let today = Utc::now().date_naive();
         let elapsed_days = (today - yt_date).num_days();
-
         // 4. 若大於設定的限制天數，則動態生成跨平台更新指引
         if elapsed_days > max_age_days {
             // 偵測目前使用者的作業系統，給予最精準的更新小抄
@@ -460,28 +442,25 @@ pub fn check_yt_dlp_update_need(max_age_days: i64) -> Option<String> {
             } else {
                 "🐧 Linux 使用者請執行：\n     pip3 install -U yt-dlp 或下載最新二進位檔"
             };
-
             return Some(format!(
                 "┌────────────────────────────────────────────────────────┐\n\
-                 ⚠️  【依賴套件更新提醒】\n\
-                 │ 偵測到您本地的 yt-dlp 版本為：{}\n\
-                 │ 該版本已發布約 {} 天。因線上影音網站經常改版，\n\
-                 │ 建議您定期更新 yt-dlp 以免發生下載錯誤！\n\
-                 │\n\
-                 │ {}\n\
-                 └────────────────────────────────────────────────────────┘",
+                ⚠️  【依賴套件更新提醒】\n\
+                │ 偵測到您本地的 yt-dlp 版本為：{}\n\
+                │ 該版本已發布約 {} 天。因線上影音網站經常改版，\n\
+                │ 建議您定期更新 yt-dlp 以免發生下載錯誤！\n\
+                │\n\
+                │ {}\n\
+                └────────────────────────────────────────────────────────┘",
                 version_str, elapsed_days, update_hint
             ));
         }
     }
-
     None
 }
 
 /// 8. 一鍵自體更新與 Homebrew 安全鎖保護
 pub fn update_app() -> Result<()> {
     println!("🔄 正在檢查更新中...");
-
     // 偵測是否由 Homebrew 管理 (macOS 特色)
     let current_exe = std::env::current_exe().unwrap_or_default();
     let exe_path_str = current_exe.to_string_lossy().to_string();
@@ -491,12 +470,9 @@ pub fn update_app() -> Result<()> {
         println!("   brew upgrade dl-media (或 yt-dlp-tui)");
         return Ok(());
     }
-
     // 呼叫 self_update 進行自動更新
     // 這裡調用底層的 self_update 庫（若專案有引入此相依性）
-    // 以下為自體更新的虛擬核心邏輯示意
     match self_update::backends::github::Update::configure()
-        .register_name("yt-dlp-tui")
         .repo_owner("idolikechemistry")
         .repo_name("yt-dlp-tui")
         .bin_name("yt-dlp-tui")
@@ -514,6 +490,5 @@ pub fn update_app() -> Result<()> {
         }
         Err(e) => anyhow::bail!("❌ 更新失敗，原因：{}", e),
     }
-
     Ok(())
 }
