@@ -5,21 +5,17 @@
 # 1. 當偵測到您推送了符合 "v*" (如 v0.0.1 或 v0.0.1-beta.1) 格式的標籤時觸發。
 # 2. 自動檢查標籤內是否含有 "-"，若有則自動發布為 GitHub Pre-release (預發布) 軟體源。
 # 3. 同時啟動三台雲端虛擬主機，平行編譯並上傳 macOS, Windows, Linux 的二進位壓縮包。
-
 name: Build and Release
-
 on:
   push:
     tags:
       - "v*"
-
 permissions:
   contents: write
-
 jobs:
-  # =====================================================================
-  # 第一階段：建立 Release 空殼 (防止多機編譯上傳時發生衝突)
-  # =====================================================================
+# =====================================================================
+# 第一階段：建立 Release 空殼 (防止多機編譯上傳時發生衝突)
+# =====================================================================
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
@@ -28,7 +24,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -38,10 +33,9 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # =====================================================================
-  # 第二階段：三平台平行編譯並上傳執行檔
-  # =====================================================================
+# =====================================================================
+# 第二階段：三平台平行編譯並上傳執行檔
+# =====================================================================
   build:
     name: Build for ${{ matrix.os }}
     needs: create-release
@@ -52,36 +46,31 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             bin_name: yt-dlp-tui
-            asset_name: yt-dlp-tui-mac-arm64
+            asset_name: yt-dlp-tui-aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: yt-dlp-tui.exe
-            asset_name: yt-dlp-tui-windows-x64.exe
+            asset_name: yt-dlp-tui-x86_64-pc-windows-msvc
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: yt-dlp-tui
-            asset_name: yt-dlp-tui-linux-x64
-
+            asset_name: yt-dlp-tui-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       # 快取優化：自動快取 Cargo 依賴與編譯中介檔
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       # 3. 專案編譯 (釋出最輕量、最速的 Release 最佳化二進位檔)
       - name: Compile Project
         run: |
           cargo build --release --target ${{ matrix.target }}
-
       # 4. 產物封裝 (根據不同平台，將執行檔打包並保留可執行權限)
       - name: Package Release Assets (Windows)
         if: matrix.os == 'windows-latest'
@@ -89,14 +78,12 @@ jobs:
           cd target/${{ matrix.target }}/release
           powershell Compress-Archive -Path ${{ matrix.bin_name }} -DestinationPath ../../../${{ matrix.asset_name }}.zip
           cd ../../..
-
       - name: Package Release Assets (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
           tar -czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.bin_name }}
           cd ../../..
-
       # 5. 上傳至 Release 頁面
       - name: Upload Release Asset (Windows)
         if: matrix.os == 'windows-latest'
@@ -105,7 +92,6 @@ jobs:
           files: ${{ matrix.asset_name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload Release Asset (Unix)
         if: matrix.os != 'windows-latest'
         uses: softprops/action-gh-release@v2
@@ -113,16 +99,3 @@ jobs:
           files: ${{ matrix.asset_name }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-# =====================================================================
-# 終端機手動發布指令小抄
-# =====================================================================
-# 1. 確保已修改 Cargo.toml 內 的 version (例如 0.0.1 或 0.0.1-beta.1)
-# 2. 依序執行以下指令 (自動提交、建立本地 Tag、雙向推送)：
-# VER=$(grep -m 1 '^version' Cargo.toml | cut -d '"' -f 2) && \
-# git add . && \
-# git commit -m "chore: release v$VER" && \
-# git tag -a v$VER -m "Release v$VER: 整合防錯TUI與動態黑名單重試" && \
-# git push origin main && \
-# git push origin v$VER
-# =====================================================================
