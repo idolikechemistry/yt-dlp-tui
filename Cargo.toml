@@ -1,31 +1,31 @@
 [package]
 name = "yt-dlp-tui"
-version = "20260723.0.2"
+version = "20260723.0.5"
 edition = "2021"
 authors = ["idolikechemistry"]
 description = "A modern, highly-concurrent yt-dlp TUI and CLI wrapper written in Rust, featuring advanced cookie bypass defense and seamless subtitle/danmaku packaging."
 license = "MIT"
 
 [dependencies]
-# 非同步 runtime，支援多執行緒並行任務
+### 非同步 runtime，支援多執行緒並行任務
 tokio = { version = "1.35", features = ["full"] }
-# 命令列參數解析 (CLI 雙模基礎)
+### 命令列參數解析 (CLI 雙模基礎)
 clap = { version = "4.4", features = ["derive"] }
 clap_complete = "4.4" # 用於生成 Shell 自動補全腳本
-# 終端機智慧互動 UI (TUI 全面統一使用 inquiry 淘汰 dialoguer)
+### 終端機智慧互動 UI (TUI 全面統一使用 inquiry 淘汰 dialoguer)
 inquire = "0.6"
-# 下載與封裝進度條渲染
+### 下載與封裝進度條渲染
 indicatif = { version = "0.17", features = ["tokio"] }
-# 序列化與反序列化 (設定檔 config.toml 的核心依賴)
+### 序列化與反序列化 (設定檔 config.toml 的核心依賴)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0" # 用於解析 yt-dlp 探測的 json metadata
 toml = "0.8" # 偏好設定檔讀寫與自動重構
-# 跨平台系統路徑與目錄檢測
+### 跨平台系統路徑與目錄檢測
 dirs = "5.0"
-# 本地時間處理 (隔離暫存目錄與檔名時間戳)
+### 本地時間處理 (隔離暫存目錄與檔名時間戳)
 chrono = "0.4"
-# 正則表達式 (VTT 字幕過濾與下載日誌解析)
+### 正則表達式 (VTT 字幕過濾與下載日誌解析)
 regex = "1.10"
-# 錯誤處理
+### 錯誤處理
 anyhow = "1.0"
 self_update = "0.44.0"
