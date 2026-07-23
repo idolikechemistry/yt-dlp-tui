@@ -1,135 +1,160 @@
 # yt-dlp-tui
 
-**yt-dlp-tui** 是一款為終端機使用者設計的現代化、極致效能影音下載與封裝工具。它完美融合了 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 的強大下載能力與 [ffmpeg](https://github.com/FFmpeg/FFmpeg) 的專業後處理封裝技術，並具備優雅的命令列（CLI）自動化參數與直覺的一體化終端選單（TUI）雙核心模式。
-
-本專案集成了 **「並行下載限制」**、**「無損軌道複製合併」**、**「CJK 彈幕與純淨字幕過濾封裝」**，以及專為解決受限影音開發的 **「動態瀏覽器 Cookie 黑名單與一鍵自動繞過」** 功能。
+yt-dlp-tui 是一款基於 Rust 開發的 yt-dlp 與 FFmpeg 封裝工具，整合了命令列介面（CLI）與終端機使用者介面（TUI），提供多執行緒非同步並行下載、無損串流合併、CJK 字幕與彈幕處理，以及瀏覽器 Cookie 自動匯入與錯誤恢復機制。
 
 ---
 
-## 核心特色 (Key Features)
+## 核心功能
 
-### 1. 互動與自動雙模切換 (Dual-Mode Intelligence)
-* **CLI 自動化模式**：提供完整的命令列 Flag（`-u`、`-m`、`-f`），一經調用便自動開啟靜默下載，非常適合與系統 Cron Job 或 NAS 自動化指令碼排程對接。
-* **直覺式 TUI 選單**：若未帶齊參數，程式會自動開啟全 `inquire` 驅動的互動選單。我們對影片解析度、封裝編碼與字幕進行了「去技術化」的白話提示優化，新手也能一目了然、輕鬆操作。
+### 1. CLI 與 TUI 雙模切換
+* **自動化命令列模式（CLI）**：提供 `-u`、`-m` 與 `-f` 等參數。完整帶入參數時將直接啟動靜默下載，適用於自動化腳本、排程任務或 NAS 系統。
+* **終端互動模式（TUI）**：當啟動參數不完整時，系統將自動啟動基於 `inquire` 的互動式選單，引導使用者完成下載配置（包括多國語言字幕勾選、MKV 高解析度規格選擇等）。
 
-### 2. 智慧 Cookie 沙盒與「動態黑名單過濾重試」
-* **Cookie 沙盒隔離**：依據目標網址（Bilibili、YouTube、X 等）自動匹配專屬實體 Cookie（如 `cookie_youtube.txt`），不污染全域環境。
-* **一鍵自動繞過**：若您在 `config.toml` 中只填寫了一款主力瀏覽器（如 Chrome），當影片因年齡或會員限制下載失敗時，系統會**自動套用該瀏覽器 Cookie 重試，全程零按鍵干預**。
-* **動態黑名單過濾**：若配置了多個瀏覽器，當前瀏覽器 Cookie 驗證失敗後（精準識別 `AuthError`而非網路瞬斷），系統會自動將其排除出候選列表，防止使用者重複踩坑。
-* **實體重試防護鎖**：内建同一批任務最大 3 次重試限制，徹底杜絕程式因極端連線或 404 而陷入 TUI 無盡迴圈的死鎖風險。
+### 2. 智慧 Cookie 沙盒與瀏覽器自動重試
+* **Cookie 沙盒隔離**：依據目標 URL 自動匹配對應網站的專用 Cookie 檔案（如 `cookie_youtube.txt`、`cookie_bilibili.txt`），避免污染全域環境。
+* **自動提取重試**：當下載因年齡限制或權限受限失敗時，系統會精準識別認證錯誤（`AuthError`），並依據設定檔中的瀏覽器優先順序（`preferred_browsers`），自動提取使用者本地端瀏覽器的 Cookie 進行重試，無需人工干預。
+* **安全限制機制**：針對同一批任務設定最大 3 次重試限制，防止因極端連線或無效 URL 導致程序進入死鎖迴圈。
 
-### 3. 高並行下載控制與 Indicatif 渲染
-* 藉由 Tokio 非同步非阻塞執行緒與 **Semaphore 信號量機制**，將預設並行數限制在安全的 **3**（可在設定檔調整），並主動降低因高頻請求而被影音平台封鎖 IP 的風險。
-* 採用 `indicatif` 繪製多個互不搶佔、精美且帶有時間估算與實時速度的下載與封裝進度條。
+### 3. 非同步並行下載與進度渲染
+* **Semaphore 並行控制**：基於 Tokio 非同步執行緒與信號量機制，預設將最大並行數限制為 3（可在設定檔中調整），降低因請求頻率過高而遭影音平台暫時封鎖 IP 的風險。
+* **獨立進度渲染**：採用 `indicatif` 繪製多進度條，動態顯示各任務的即時速率、已下載百分比與預估剩餘時間，避免終端輸出互相搶佔覆蓋。
 
-### 4. 影音無損封裝與 CJK 字幕/彈幕淨化管線
-* **無損 H.264/AAC 合併**：針對 MP4 容器，自動限制影軌與音軌編碼格式，封裝時採用 **`-c:v copy -c:a copy` 的無損合併模式**，完全省去耗時的 CPU 二度解碼與重轉碼，速度提升高達 10 倍以上。
-* **外掛字幕與彈幕封裝**：下載後自動過濾 VTT 的特效標籤保留純淨字幕，若偵測到 Bilibili 影音，會自動將 XML 彈幕轉為 ASS 軌道，一併使用 `ffmpeg` 無損封裝進 MP4/MKV 影片中，解鎖極致觀看體驗。
-* **廣告業配剔除**：預設注入 `SponsorBlock` 引數，在下載合併階段自動剔除片頭片尾與置入廣告，精簡硬碟佔用。
+### 4. 無損媒體後處理管線
+* **無損合併（Stream Copy）**：針對 MP4 容器下載，自動限制視訊為 H.264、音訊為 AAC 格式，封裝時採用 `-c:v copy -c:a copy` 參數直接進行軌道複製，免除耗費 CPU 的二次編碼過程，顯著提升合併速度。
+* **字幕與彈幕封裝**：下載後自動過濾 WebVTT 的特效標籤，保留純淨字幕。若偵測到 Bilibili 下載任務，會自動調用 `danmaku2ass` 將 XML 彈幕檔轉換為 ASS 字幕格式，並與清洗後的字幕一併封裝至影片中。
+* **置入性內容過濾**：預設注入 `SponsorBlock` 引數，在封裝階段自動剔除片頭、片尾與置入性廣告。
 
-### 5. 設定檔自適應升級與 Markdown 報表
-* 軟體每次升級時，會自動比對本地與最新版的欄位結構。**若有新增欄位（如 `preferred_browsers`），會自動補齊並補上白話註解，同時完美保留使用者既有的自訂路徑設定**，防範解析崩潰。
-* 下載結束後，會自動在輸出資料夾內建立 `download_session.md` 任務執行報表，清晰記錄每部影片的下載狀態與詳細錯誤堆疊，方便日後追蹤與除錯。
-
----
-
-## 系統依賴 (Prerequisites)
-
-無論您使用哪種安裝方式，請確保您的系統已安裝以下核心相依套件（本工具在啟動時會自動進行智慧環境檢測）：
-
-1. **Python (3.10+)**：`yt-dlp` 的執行基礎。
-2. **yt-dlp**：影音下載核心。
-3. **ffmpeg / ffprobe**：多媒體軌道資訊偵測、字幕清洗與無損封裝。
-4. **danmaku2ass** (可選)：用於 Bilibili 彈幕轉換。
+### 5. 自適應升級與日誌系統
+* **設定檔結構同步**：軟體升級時自動對比本地 `config.toml` 與最新版本的欄位結構，自動補齊新增欄位（如 `preferred_browsers`）並保留使用者原有的自訂路徑配置。
+* **Markdown 任務報表**：每次執行完成後，自動於輸出目錄生成 `download_session-[Timestamp].md` 執行日誌，詳細記錄各任務的下載狀態、解析度、儲存檔名及錯誤堆疊資訊，便於除錯追蹤。
 
 ---
 
-## 安裝與更新指引 (Installation)
+## 系統依賴
 
-### macOS (推薦 Homebrew)
+本工具啟動時會自動進行執行環境與關鍵依賴套件檢測，請確保系統已完成以下套件的安裝：
+
+1. **Python (3.10+)**：執行 `yt-dlp` 的基礎環境。
+2. **yt-dlp**：影音解析與下載核心。
+3. **FFmpeg / FFprobe**：媒體軌道偵測、字幕清洗與無損封裝核心。
+4. **danmaku2ass** (選用)：Bilibili 彈幕轉換所需的指令列工具。
+
+---
+
+## 安裝指引
+
+目前專案尚未配置 Homebrew 軟體源，非 Windows 平台使用者請依循以下手動部署說明安裝。
+
+### macOS / Linux 平台
+
+請由 GitHub Releases 頁面下載適用於您系統架構的壓縮檔（`yt-dlp-tui-mac-arm64.tar.gz` 或 `yt-dlp-tui-linux-x64.tar.gz`），並執行以下安裝流程：
+
+1. **解壓縮歸檔檔案**：
+   ```bash
+   tar -xzvf yt-dlp-tui-linux-x64.tar.gz
+   ```
+
+2. **賦予可執行權限**：
+   ```bash
+   chmod +x yt-dlp-tui
+   ```
+
+3. **移動至系統環境路徑**（以便在任何終端路徑下直接調用）：
+   ```bash
+   sudo mv yt-dlp-tui /usr/local/bin/
+   ```
+
+*macOS 使用者注意事項*：若執行時遭遇 Gatekeeper 攔截（顯示無法驗證開發者），請在終端機執行以下命令清除隔離屬性：
 ```bash
-# 新增倉庫並安裝
-brew tap idolikechemistry/yt-dlp-tui && brew install idolikechemistry/yt-dlp-tui/yt-dlp-tui
-
-# 日後更新
-brew upgrade yt-dlp-tui
-
-# 解除安裝
-brew uninstall yt-dlp-tui && brew untap idolikechemistry/yt-dlp-tui
+xattr -d com.apple.quarantine /usr/local/bin/yt-dlp-tui
 ```
 
-### Linux
-```bash
-# 一鍵下載二進位檔並賦予權限
-curl -L "https://github.com/idolikechemistry/yt-dlp-tui/releases/latest/download/yt-dlp-tui-linux-x64" -o yt-dlp-tui && chmod +x yt-dlp-tui && sudo mv yt-dlp-tui /usr/local/bin/
-```
-*(Mac 晶片使用者亦可手動將 `yt-dlp-tui-linux-x64` 替換為 `yt-dlp-tui-mac-arm64` 執行同等安裝)*
+### Windows 平台
 
-### Windows
-1. 請前往 [Releases](https://github.com/idolikechemistry/yt-dlp-tui/releases) 頁面下載最新的 `yt-dlp-tui-windows-x64.exe` 。
-2. 將其手動放置於您慣用的資料夾中（建議加入系統環境變數 `Path` 以便在任一 CMD/PowerShell 視窗直接呼叫）。
+1. 前往 GitHub Releases 下載最新版的 `yt-dlp-tui-windows-x64.exe`（打包於 `.zip` 檔案中）。
+2. 解壓縮後將 `.exe` 放置於自訂工作目錄。
+3. 建議將該工作目錄路徑新增至系統環境變數的 `Path` 中，以便在命令提示字元（CMD）或 PowerShell 中直接調用。
 
----
+### 從原始碼編譯 (Build from Source)
 
-## 指令參數說明 (Options)
-
-| 參數 | 說明 | 命令範例 |
-| :--- | :--- | :--- |
-| `-u, --url` | 貼上要下載的影片或播放清單網址 (支援多個，以空格隔開) | `-u "https://..."` |
-| `-m, --media-type` | 指定下載類型 (`1`: 純音訊, `2`: 無聲影片, `3`: 有聲影片) | `-m 3` |
-| `-f, --format` | 指定輸出格式 (音訊可選: `mp3`/`m4a`；影片可選: `mp4`/`mkv`) | `-f mp4` |
-| `-o, --output` | 指定儲存資料夾路徑 (預設為系統的 `Downloads`) | `-o "./my_videos"` |
-| `-c, --cookie` | 手動指定本地特定 Cookie 檔案路徑 | `-c "./cookie.txt"` |
-| `--fc` | 強制調用 App 設定資料夾內已儲存的 Cookie | `--fc` |
-| `--open-config` | 開啟設定與專屬 Cookie 的系統路徑 | `--open-config` |
-| `-h, --help` | 顯示所有中文化參數說明手冊 | `-h` |
-| `-V, --version` | 顯示當前應用程式版本 | `-V` |
-
----
-
-## 偏好設定 (`config.toml`)
-
-開啟終端機執行 `yt-dlp-tui --open-config`，系統會自動在檔案管理器中為您開啟設定目錄。您可以使用任何文字編輯器編輯 `config.toml`
-
-### 設定檔預設儲存路徑
-* **Windows**：`%APPDATA%\yt-dlp-tui\`
-* **macOS**：`~/Library/Application Support/yt-dlp-tui/`
-* **Linux**：`~/.config/yt-dlp-tui/`
-
----
-
-## Cookie 沙盒管理防護
-
-部分高畫質、年齡限制或會員/粉絲專屬影片，必須提供登入後的 Cookie 才能獲取影片資料。
-您可以利用瀏覽器外掛將 Cookie 匯出為 **Netscape 標準文字格式**，並重新命名放入設定目錄中：
-
-* **YouTube** 專用：`cookie_youtube.txt`
-* **Bilibili** 專用：`cookie_bilibili.txt`
-* **Twitter/X** 專用：`cookie_twitter.txt`
-* **Instagram** 專用：`cookie_instagram.txt`
-
-系統在掃描到對應網站時，會**優先自動套用這些沙盒 Cookie 進行解析**，不損害日常主瀏覽器的安全性。
-
----
-
-## 開發者構建指引 (Build from Source)
-
-如果您希望從原始碼構建此專案，請確保您已安裝 [Rust & Cargo](https://rustup.rs/) 編譯鏈：
+您亦可直接透過 Rust 工具鏈進行本地編譯：
 
 ```bash
-# 1. 複製倉庫
+# 複製儲存庫
 git clone https://github.com/idolikechemistry/yt-dlp-tui.git
 cd yt-dlp-tui
 
-# 2. 編譯 Release 版本 (已優化執行效能與體積)
+# 編譯 Release 版本（優化運行效能與體積）
 cargo build --release
 
-# 3. 執行編譯後的程式
+# 執行編譯產物
 ./target/release/yt-dlp-tui
 ```
 
 ---
 
-## License
+## 設定檔說明
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+偏好設定儲存於 `config.toml` 中，可在終端機執行 `yt-dlp-tui --open-config` 自動打開設定路徑。
+
+### 設定檔儲存路徑
+* **Windows**：`%APPDATA%\yt-dlp-tui\`
+* **macOS**：`~/Library/Application Support/yt-dlp-tui/`
+* **Linux**：`~/.config/yt-dlp-tui/`
+
+### 設定參數表 (`config.toml`)
+| 參數 | 型態 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `version` | 字串 | 當前程式版本 | 用於設定檔結構自動升級追蹤，請勿手動修改。 |
+| `download_dir` | 字串 | `""` | 預設下載存檔目錄。留空時將預設使用系統的 Downloads 目錄。 |
+| `cookie_dir` | 字串 | `""` | 專屬 Cookie 檔案存放目錄。留空時預設為程式的設定資料夾。 |
+| `default_video_format`| 字串 | `"mp4"` | 預設視訊封裝格式（可選：`mp4`, `mkv`）。 |
+| `default_audio_format`| 字串 | `"m4a"` | 預設音訊封裝格式（可選：`mp3`, `m4a`）。 |
+| `max_concurrent_downloads` | 整數 | `3` | 最大並行下載任務數。建議範圍為 1 至 5，設過高易遭平台封鎖 IP。 |
+| `preferred_browsers` | 陣列 | `["chrome", "firefox", "safari", "edge"]` | 當權限受阻時，自動提取 Cookie 的本機瀏覽器候選清單（支援 chrome, firefox, safari, edge, brave, opera, vivaldi 等）。 |
+
+### Cookie 沙盒命名規範
+將瀏覽器導出的 Netscape 格式 Cookie 檔案重新命名，並置於 `cookie_dir` 目錄下：
+* YouTube 專用：`cookie_youtube.txt`
+* Bilibili 專用：`cookie_bilibili.txt`
+* Twitter / X 專用：`cookie_twitter.txt`
+* Instagram 專用：`cookie_instagram.txt`
+
+---
+
+## 參數與指令說明
+
+### 命令列參數 (CLI Options)
+
+| 參數 | 說明 | 範例 |
+| :--- | :--- | :--- |
+| `-u, --url` | 指定下載目標 URL，支援輸入多個網址（以空格分隔） | `-u "https://..."` |
+| `-m, --media-type` | 指定下載媒體類型（`1`: 純音訊, `2`: 無聲視訊, `3`: 有聲視訊）| `-m 3` |
+| `-f, --format` | 指定封裝格式（音訊：`mp3`/`m4a`；視訊：`mp4`/`mkv`） | `-f mp4` |
+| `-o, --output` | 手動覆寫本次任務的下載存檔路徑 | `-o "./my_videos"` |
+| `-c, --cookie` | 手動指定本地特定 Cookie 檔案路徑 | `-c "./cookie.txt"` |
+| `--fc` | 強制調用設定資料夾中已儲存的 Cookie（跳過受限內容探測） | `--fc` |
+| `--config` | 開氣互動式 TUI 設定引導，配置路徑與瀏覽器清單 | `--config` |
+| `--open-config` | 開啟作業系統中該設定檔與專屬 Cookie 的預設儲存目錄 | `--open-config` |
+| `--update` | 檢查並自動升級至 GitHub 最新 Release 版本 | `--update` |
+| `-h, --help` | 顯示中文化幫助說明手冊 | `-h` |
+| `-V, --version` | 顯示當前應用程式版本 | `-V` |
+
+### 執行範例
+
+1. **自動化模式（CLI 靜默下載）**：
+   ```bash
+   yt-dlp-tui -u "https://www.youtube.com/watch?v=example" -m 3 -f mp4
+   ```
+
+2. **互動模式（TUI）**：
+   ```bash
+   # 未帶足參數時，系統會自動跳轉至 inquire 互動選單
+   yt-dlp-tui
+   ```
+
+---
+
+## 授權條款
+
+本專案採用 [MIT License](LICENSE) 進行授權。
