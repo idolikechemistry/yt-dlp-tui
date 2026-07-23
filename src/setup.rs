@@ -6,7 +6,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use inquire::{Confirm, CustomType, MultiSelect, Select, Text};
+use inquire::{Confirm, MultiSelect, Select, Text};
 
 /// 1. 檢查系統環境是否具備必要工具
 pub fn check_dependencies() -> Result<()> {
@@ -121,10 +121,10 @@ pub fn open_folder(path: &PathBuf) -> Result<()> {
 /// 5. 處理 Cookie 載入邏輯
 pub fn handle_cookies(
     site_target: &str,
-    has_restricted: bool,
+    _has_restricted: bool,
     manual_cookie: &Option<String>,
     resolved_cookie_dir: &Path,
-    is_silent: bool,
+    _is_silent: bool,
 ) -> Result<Vec<String>> {
     let mut cookie_args = Vec::new();
     if let Some(cookie_path) = manual_cookie {
