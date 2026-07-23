@@ -1,6 +1,6 @@
 [package]
 name = "yt-dlp-tui"
-version = "2026.7.23"
+version = "20260723.0.1"
 edition = "2021"
 authors = ["idolikechemistry"]
 description = "A modern, highly-concurrent yt-dlp TUI and CLI wrapper written in Rust, featuring advanced cookie bypass defense and seamless subtitle/danmaku packaging."
