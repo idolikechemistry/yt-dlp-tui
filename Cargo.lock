@@ -2349,7 +2349,7 @@ dependencies = [
 
 [[package]]
 name = "yt-dlp-tui"
-version = "0.0.2-beta.1"
+version = "20260723.0.1-beta"
 dependencies = [
  "anyhow",
  "chrono",
