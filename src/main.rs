@@ -16,7 +16,7 @@ use std::process;
 /// 🎯 程式進入點
 #[tokio::main]
 async fn main() {
-    println!("🚀 yt-dlp-tui v{}", env!("CARGO_PKG_VERSION"));
+    println!("yt-dlp-tui v {}", env!("CARGO_PKG_VERSION"));
     if let Err(e) = run().await {
         eprintln!("\n❌ [執行錯誤]: {}", e);
         for cause in e.chain().skip(1) {
