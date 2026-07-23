@@ -13,19 +13,20 @@ use proc::LogManager;
 use std::path::PathBuf;
 use std::process;
 
+/// 🎯 程式進入點
 #[tokio::main]
 async fn main() {
-    println!("yt-dlp-tui v{}", env!("CARGO_PKG_VERSION"));
+    println!("🚀 yt-dlp-tui v{}", env!("CARGO_PKG_VERSION"));
     if let Err(e) = run().await {
         eprintln!("\n❌ [執行錯誤]: {}", e);
         for cause in e.chain().skip(1) {
-            eprintln!("  原因: {}", cause);
+            eprintln!(" 原因: {}", cause);
         }
         process::exit(1);
     }
 }
 
-/// 互動式配置下載偏好（選擇語言與解析度規格）
+/// 🎯 互動式模式下，獲取影片的進階下載規格選項 (多國字幕選擇 & MKV 高畫質解析度選擇)
 fn setup_download_options(
     videos: &mut Vec<parser::VideoItem>,
     cookie_args: &[String],
@@ -37,7 +38,7 @@ fn setup_download_options(
         return;
     }
     for video in videos.iter_mut() {
-        println!("正在獲取 {} 的可選設定...", video.title);
+        println!("⏳ 正在獲取 {} 的可選設定...", video.title);
         if let Ok(info) = parser::probe_video_info(&video.url, cookie_args) {
             video.chosen_langs = ui::select_subtitles(&info.langs);
             if media_type != 1 && target_ext == "mkv" {
@@ -45,35 +46,68 @@ fn setup_download_options(
             }
             video.metadata = Some(info);
         } else {
-            println!("無法獲取 {} 的進階資訊，將使用預設參數。", video.title);
+            println!("⚠️ 無法獲取 {} 的進階資訊，將使用預設參數。", video.title);
         }
     }
 }
 
+/// 🎯 核心控制流排程
 async fn run() -> Result<()> {
-    // 1. 命令列參數解析
     let args = Args::parse();
+
+    // =====================================================================
+    // 1. 優先攔截一鍵自體更新 --update 參數
+    // =====================================================================
+    if args.update {
+        setup::update_app()?;
+        return Ok(());
+    }
+
+    // =====================================================================
+    // 2. 優先處理 Shell 自動補全腳本產生器
+    // =====================================================================
     if let Some(generator) = args.generator {
         let mut cmd = Args::command();
         let name = cmd.get_name().to_string();
         clap_complete::generate(generator, &mut cmd, name, &mut std::io::stdout());
         return Ok(());
     }
+
+    // =====================================================================
+    // 3. 驗證命令行參數邏輯是否合規 (例如防止純音訊配置 mp4 輸出)
+    // =====================================================================
     args.validate()?;
 
-    // 2. 初始化設定環境並載入偏好 config.toml
+    // =====================================================================
+    // 4. 初始化應用程式環境與設定檔
+    // =====================================================================
     let (app_config_dir, config) = setup::init_config()?;
     let config_file_path = app_config_dir.join("config.toml");
+
+    // =====================================================================
+    // 5. 優先攔截 --config 偏好設定引導指令
+    // =====================================================================
     if args.config {
         setup::interactive_config_setup(&config_file_path, config)?;
         println!("👋 設定已完成，您可以重新執行程式來套用新設定。");
         return Ok(());
     }
 
-    // 3. 系統核心依賴工具檢查
+    // =====================================================================
+    // 6. 執行系統關鍵依賴套件檢查 (yt-dlp, ffmpeg, ffprobe, danmaku2ass)
+    // =====================================================================
     setup::check_dependencies()?;
 
-    // 4. 定義最終儲存與暫存目錄
+    // =====================================================================
+    // 7. 依賴套件過期安全提醒 (偵測本地 yt-dlp 年齡是否超過 30 天，若過期則印出醒目警告框)
+    // =====================================================================
+    if let Some(reminder_box) = setup::check_yt_dlp_update_need(30) {
+        println!("\n{}\n", reminder_box);
+    }
+
+    // =====================================================================
+    // 8. 決策最終下載存檔資料夾、任務暫存目錄與 Cookie 儲存目錄
+    // =====================================================================
     let final_download_dir = args
         .output
         .as_ref()
@@ -94,7 +128,9 @@ async fn run() -> Result<()> {
         PathBuf::from(&config.cookie_dir)
     };
 
-    // 5. 判斷自動化靜默下載 vs 互動選單輸入
+    // =====================================================================
+    // 9. 決策雙模下載機制 (全自動模式 vs. 互動式 TUI 模式)
+    // =====================================================================
     let is_silent = args.is_fully_automated();
     let (input_urls, media_type, target_ext) = if is_silent {
         (
@@ -106,16 +142,34 @@ async fn run() -> Result<()> {
         ui::get_user_input(&args).context("無法取得使用者輸入")?
     };
 
-    // 6. 循環處理每一個輸入的影片網址
+    // =====================================================================
+    // 10. 迭代處理每一個下載網址
+    // =====================================================================
     for input_url in input_urls {
-        println!("\n開始處理網址: {}", input_url);
+        println!("\n▶️ 開始處理網址: {}", input_url);
         let site_target = parser::extract_site_name(&input_url);
-        
-        // 探測與獲取公開或受限內容
+
+        // 🎯 智慧警報：如果是 Bilibili 影片下載，且使用者沒有傳入實體 Cookie 參數
+        if site_target == "bilibili" && media_type != 1 && !is_silent && args.cookie.is_none() {
+            // 檢查 Cookie 設定夾是否已有 B站專用 cookie 檔
+            let expected_filename = "cookie_bilibili.txt";
+            let target_file = resolved_cookie_dir.join(expected_filename);
+            if !target_file.exists() {
+                println!("=================================================================");
+                println!("📺 偵測到 Bilibili 影片下載任務：");
+                println!("⚠️  【畫質受限警報】B站限制「未登入 / 無 Cookie」使用者僅能下載最低畫質 (360p/480p)！");
+                println!("💡 建議提醒：");
+                println!("   1. 您可以在下載失敗時，透過彈出的「錯誤恢復選單」自動套用瀏覽器 Cookie 解鎖最高 1080p/4K 畫質。");
+                println!("   2. 或者，您也可以繼續下載，但將只能取得最低畫質影像 (純音訊不受此畫質限制)。");
+                println!("=================================================================\n");
+            }
+        }
+
+        // 探測網址：獲取影片清單、判斷是否為 PlayList，並偵測是否為受限內容 (Age / Member only)
         let (mut valid_videos, is_playlist, has_restricted) =
             parser::scan_url(&input_url, args.force_cookie, &site_target)?;
-            
-        // 優先匹配對應平台的專屬沙盒 Cookie
+
+        // 載入專屬 Cookie (手動傳入優先 -> 尋找設定目錄 site 專用檔 -> 阻斷等待匯入)
         let cookie_args = setup::handle_cookies(
             &site_target,
             has_restricted,
@@ -123,15 +177,18 @@ async fn run() -> Result<()> {
             &resolved_cookie_dir,
             is_silent,
         )?;
-        
+
+        // 若成功套用 Cookie 且為播放清單，重新掃描以發掘先前因權限被隱藏的專屬/會員影片
         if !cookie_args.is_empty() && is_playlist {
-            valid_videos = parser::rescan_with_cookies(&input_url, &cookie_args, valid_videos.len())?;
+            valid_videos =
+                parser::rescan_with_cookies(&input_url, &cookie_args, valid_videos.len())?;
         }
 
+        // 決定輸出終點資料夾（若是播放清單，會在此層自動建立以「清單標題」命名的專屬子目錄）
         let final_target_dir =
             utils::prepare_output_dir(&final_download_dir, &input_url, &cookie_args, is_playlist);
 
-        // 建立 Markdown 執行日誌
+        // 🎯 初始化 Markdown 下載報告日誌，並寫入基本 Metadata 與標頭
         LogManager::init_log(&final_target_dir, &input_url);
         LogManager::log_event(
             &final_target_dir,
@@ -139,7 +196,10 @@ async fn run() -> Result<()> {
             &format!("掃描完畢，準備下載 {} 個項目", valid_videos.len()),
         );
 
+        // 構建 yt-dlp 下載核心基礎參數列表
         let dl_args = utils::build_download_args(media_type, &target_ext, &input_url, &cookie_args);
+
+        // 互動式下載前置選項設定 (多國字幕勾選、MKV 高畫質清單選擇等)
         setup_download_options(
             &mut valid_videos,
             &cookie_args,
@@ -151,31 +211,19 @@ async fn run() -> Result<()> {
         let mut current_cookie_args = cookie_args;
         let mut session = proc::DownloadSession {
             pending_videos: valid_videos,
-            failed_tasks: Vec::new(),
+            failed_videos: Vec::new(),
         };
 
-        // 🌟 初始化動態排除黑名單與重試安全防禦控制
-        let mut attempted_browsers: Vec<String> = Vec::new();
-        let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3; // 實體防死鎖臨界上限
-
-        // 7. 啟動非同步並行下載與錯誤恢復重試迴圈
+        // =====================================================================
+        // 11. 啟動並行下載與錯誤恢復重試迴圈
+        // =====================================================================
         loop {
             if session.pending_videos.is_empty() {
                 break;
             }
-            if retry_count >= MAX_RETRIES {
-                println!("\n已達到下載重試上限 ({} 次)，自動終止任務以防止死鎖與網絡資源鎖定。", MAX_RETRIES);
-                LogManager::log_event(
-                    &final_target_dir,
-                    "ERROR",
-                    &format!("已達到下載重試上限 ({} 次)，自動終止任務", MAX_RETRIES),
-                );
-                break;
-            }
 
-            // 執行當前 Session 的下載與 ffmpeg 封裝
-            let failed_tasks = proc::execute_download_session(
+            // 非同步派發執行序任務
+            let failed_videos = proc::execute_download_session(
                 session,
                 is_playlist,
                 media_type,
@@ -188,131 +236,88 @@ async fn run() -> Result<()> {
             )
             .await?;
 
-            if failed_tasks.is_empty() {
-                break; // 下載全部成功，安全退出
+            // 下載完美成功，或是全自動化命令行模式（命令行模式不觸發互動恢復），直接退出迴圈
+            if failed_videos.is_empty() || is_silent {
+                break;
             }
 
-            // 提取下載失敗的 Video 項目
-            let failed_videos: Vec<parser::VideoItem> = failed_tasks.iter().map(|t| t.video.clone()).collect();
-            
-            // 檢查是否包含因登入/權限/年齡限制引起的 AuthError
-            let has_auth_error = failed_tasks.iter().any(|t| {
-                matches!(t.error, proc::DLMediaError::AuthError(_))
-            });
-
+            // 🎯 紀錄攔截到的失敗軌跡至 Markdown 報表中
             LogManager::log_event(
                 &final_target_dir,
                 "WARN",
                 &format!(
-                    "本次批次下載未完全成功，共 {} 個項目下載失敗 (是否存在權限問題: {})",
-                    failed_tasks.len(),
-                    has_auth_error
+                    "進入錯誤攔截，共 {} 個項目下載失敗，觸發恢復選單",
+                    failed_videos.len()
                 ),
             );
 
-            // 在自動化/靜默下載模式下，不進行交互式恢復
-            if is_silent {
-                println!("全自動靜默模式下發現失敗項目，拒絕彈出選單，中斷流程。");
-                break;
-            }
-
-            // 8. 進入精準錯誤攔截恢復 TUI 選單
-            if has_auth_error {
-                retry_count += 1;
-                match ui::prompt_error_recovery(failed_tasks.len()) {
-                    ui::ErrorRecoveryChoice::Browser => {
-                        // 載入自訂瀏覽器配置列表
-                        let mut active_browsers = config.preferred_browsers.clone();
-                        
-                        // 跨平台過濾：Safari 只在 macOS 可用
-                        #[cfg(not(target_os = "macos"))]
-                        active_browsers.retain(|b| b != "safari");
-
-                        // 核心防禦：動態排除已嘗試失敗的瀏覽器 (黑名單排除)
-                        active_browsers.retain(|b| !attempted_browsers.contains(b));
-
-                        if active_browsers.is_empty() {
-                            println!("\n❌ 您的配置列表內所有可用瀏覽器的 Cookie 皆已嘗試且全部失效。");
-                            LogManager::log_event(
-                                &final_target_dir,
-                                "WARN",
-                                "自訂瀏覽器列表皆已嘗試失效，安全引導降級至手動 Cookie 匯入"
-                            );
-                            
-                            // 安全降級引導：手動放入 cookie_site.txt 檔案
-                            let new_cookie = setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
-                            if new_cookie.is_empty() {
-                                LogManager::log_event(&final_target_dir, "WARN", "使用者未提供有效手動 Cookie，放棄重試");
-                                break;
-                            }
-                            current_cookie_args = new_cookie;
-                        } else if active_browsers.len() == 1 {
-                            // 🌟 一鍵自動繞過：若僅配置或僅剩一個瀏覽器，自動跳過 TUI 選擇直接套用
-                            let single_browser = active_browsers[0].clone();
-                            println!("\n⚡ 偵測到可用的瀏覽器列表僅剩一組，自動套用 [{}] 瀏覽器 Cookie 進行重試...", single_browser);
-                            LogManager::log_event(
-                                &final_target_dir,
-                                "INFO",
-                                &format!("瀏覽器僅剩一組，自動繞過選單套用 {}", single_browser)
-                            );
-                            attempted_browsers.push(single_browser.clone());
-                            current_cookie_args = vec!["--cookies-from-browser".into(), single_browser];
+            // 彈出錯誤恢復選單
+            match ui::prompt_error_recovery(failed_videos.len()) {
+                ui::ErrorRecoveryChoice::Browser => {
+                    // 🎯 智慧型防撞：優先採用 config.toml 中配置的自訂慣用瀏覽器優先順序
+                    let browser = if !config.preferred_browsers.is_empty() {
+                        if config.preferred_browsers.len() == 1 {
+                            config.preferred_browsers[0].clone()
                         } else {
-                            // 彈出經過排除過濾後的動態瀏覽器選單
-                            let browser = ui::select_browser(&active_browsers);
-                            LogManager::log_event(
-                                &final_target_dir,
-                                "INFO",
-                                &format!("使用者手動選擇：自動套用 {} 瀏覽器 Cookie 進行重試", browser),
-                            );
-                            attempted_browsers.push(browser.clone());
-                            current_cookie_args = vec!["--cookies-from-browser".into(), browser];
+                            let selection = inquire::Select::new("請選擇您有登入該網站、並想自動提取 Cookie 的瀏覽器：")
+                                .prompt()
+                                .unwrap();
+                            config.preferred_browsers[selection].clone()
                         }
+                    } else {
+                        ui::select_browser(&config.preferred_browsers)
+                    };
 
-                        // 重組失敗項目為 pending 並刷新 Session 重啟
-                        session = proc::DownloadSession {
-                            pending_videos: failed_videos,
-                            failed_tasks: Vec::new(),
-                        };
-                        println!("正在套用新 Cookie 重新嘗試下載...");
-                    }
-                    ui::ErrorRecoveryChoice::Manual => {
-                        let new_cookie = setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
-                        if new_cookie.is_empty() {
-                            LogManager::log_event(&final_target_dir, "WARN", "使用者未提供有效手動 Cookie，終止重試");
-                            println!("❌ 未提供有效的 Cookie，放棄重試。");
-                            break;
-                        }
-                        current_cookie_args = new_cookie;
-                        LogManager::log_event(&final_target_dir, "INFO", "使用者選擇：手動匯入 Cookie 進行重試");
-                        
-                        session = proc::DownloadSession {
-                            pending_videos: failed_videos,
-                            failed_tasks: Vec::new(),
-                        };
-                        println!("正在使用手動 Cookie 重新嘗試下載...");
-                    }
-                    ui::ErrorRecoveryChoice::Abort => {
-                        LogManager::log_event(&final_target_dir, "INFO", "使用者選擇：放棄失敗項目並結束");
-                        println!("👋 已放棄失敗項目。");
+                    current_cookie_args = vec!["--cookies-from-browser".into(), browser.clone()];
+                    LogManager::log_event(
+                        &final_target_dir,
+                        "INFO",
+                        &format!("使用者選擇：自動套用 {} 瀏覽器 Cookie 進行重試", browser),
+                    );
+
+                    session = proc::DownloadSession {
+                        pending_videos: failed_videos,
+                        failed_videos: Vec::new(),
+                    };
+                    println!("🔄 正在套用瀏覽器 Cookie 重新嘗試下載...");
+                }
+                ui::ErrorRecoveryChoice::Manual => {
+                    let new_cookie =
+                        setup::wait_for_manual_cookie(&resolved_cookie_dir, &site_target)?;
+                    if new_cookie.is_empty() {
+                        LogManager::log_event(
+                            &final_target_dir,
+                            "WARN",
+                            "使用者未提供有效 Cookie，放棄重試",
+                        );
+                        println!("❌ 未提供有效的 Cookie，放棄重試。");
                         break;
                     }
+                    current_cookie_args = new_cookie;
+                    LogManager::log_event(
+                        &final_target_dir,
+                        "INFO",
+                        "使用者選擇：手動匯入 Cookie 進行重試",
+                    );
+
+                    session = proc::DownloadSession {
+                        pending_videos: failed_videos,
+                        failed_videos: Vec::new(),
+                    };
+                    println!("🔄 正在使用手動 Cookie 重新嘗試下載...");
                 }
-            } else {
-                // 原地重新嘗試：非 Auth 類引起的網路斷連波動，允許直接進行原參數重試
-                retry_count += 1;
-                println!("\n偵測到非權限引起的網路錯誤（如 Socket 逾時），自動進行原地重新嘗試 ({}/{})", retry_count, MAX_RETRIES);
-                LogManager::log_event(
-                    &final_target_dir,
-                    "INFO",
-                    &format!("原地重新下載重試 ({}/{})", retry_count, MAX_RETRIES)
-                );
-                session = proc::DownloadSession {
-                    pending_videos: failed_videos,
-                    failed_tasks: Vec::new(),
-                };
+                ui::ErrorRecoveryChoice::Abort => {
+                    LogManager::log_event(
+                        &final_target_dir,
+                        "INFO",
+                        "使用者選擇：放棄失敗項目並結束",
+                    );
+                    println!("👋 已放棄其餘失敗項目。");
+                    break;
+                }
             }
         }
     }
+
     Ok(())
 }

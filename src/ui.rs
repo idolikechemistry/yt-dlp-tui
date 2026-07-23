@@ -3,70 +3,40 @@ use crate::parser::VideoFormat;
 use anyhow::Result;
 use inquire::{
     ui::{RenderConfig, Styled},
-    MultiSelect, Select as InquireSelect, Text,
+    MultiSelect, Select as InquireSelect,
 };
 
-/// 錯誤恢復的選擇項目
-pub enum ErrorRecoveryChoice {
-    Browser,
-    Manual,
-    Abort,
-}
-
-/// 估算字串在終端機中的視覺寬度 (考量 CJK 全形字元佔 2 格，ASCII 佔 1 格)
-fn display_width(s: &str) -> usize {
-    s.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum()
-}
-
-/// 將字串以空白填滿至指定的視覺寬度
-fn pad_line(s: &str, target_width: usize) -> String {
-    let current_w = display_width(s);
-    if current_w >= target_width {
-        s.to_string()
-    } else {
-        let padding = " ".repeat(target_width - current_w);
-        format!("{}{}", s, padding)
-    }
-}
-
-/// 互動式取得使用者輸入
-/// 回傳型別為 Vec 以支援多連結批量輸入
+/// 📥 互動式取得使用者輸入（用於互動 TUI 模式）
+/// 回傳型別為 (網址陣列, 媒體類型, 輸出格式)
 pub fn get_user_input(args: &crate::args::Args) -> Result<(Vec<String>, u8, String)> {
+    let theme = ColorfulTheme::default();
+
     // 1. 取得網址 (支援多個，以空格隔開)
     let urls = match &args.url {
         Some(u) => u.clone(),
         None => {
-            let input = Text::new("> 請貼上影片或播放清單網址 (多個網址請用空格隔開)：")
-                .prompt()
-                .unwrap_or_default();
+            let input = Input::<String>::with_theme(&theme)
+                .with_prompt("🔗 請貼上影片或播放清單網址 (多個網址請用空格隔開)")
+                .interact_text()?;
             // 清洗並切割字串成陣列
             input.split_whitespace().map(|s| s.to_string()).collect()
         }
     };
 
-    if urls.is_empty() {
-        anyhow::bail!("[Error] 未輸入任何網址。");
-    }
-
     // 2. 取得下載類型
     let media_type_enum = match args.media_type {
         Some(t) => t,
         None => {
-            let types = vec![
-                "1. 音訊 (自動提取最高音質轉檔)",
-                "2. 無聲影片 (僅下載最高畫質影片素材)",
-                "3. 有聲影片 (預設最高畫質影音合併)",
-            ];
-            let selection = InquireSelect::new("> 請選擇您要下載的媒體類型：", types)
-                .prompt()
-                .unwrap_or("3. 🎥 有聲影片 (預設最高畫質影音合併 [推薦])");
-
-            if selection.starts_with('1') {
-                MediaType::Audio
-            } else if selection.starts_with('2') {
-                MediaType::VideoOnly
-            } else {
-                MediaType::Video
+            let types = vec!["🎧 音訊", "🔕 無聲影片", "🎥 有聲影片"];
+            let selection = Select::with_theme(&theme)
+                .with_prompt("🎬 請選擇下載類型")
+                .items(&types)
+                .default(2)
+                .interact()?;
+            match selection {
+                0 => MediaType::Audio,
+                1 => MediaType::VideoOnly,
+                _ => MediaType::Video,
             }
         }
     };
@@ -77,20 +47,18 @@ pub fn get_user_input(args: &crate::args::Args) -> Result<(Vec<String>, u8, Stri
         None => {
             let formats = match media_type_enum {
                 MediaType::Audio => vec!["m4a", "mp3"],
-                _ => vec![
-                    "mp4 (高相容性：強制鎖定 H.264/AAC 編碼，保證所有裝置流暢播放)",
-                    "mkv (解鎖 4K/8K 畫質：保留最高原始視訊與音訊格式封裝)",
-                ],
+                _ => vec!["mp4 (最高 1080p，相容性佳)", "mkv (解鎖 4K/8K 畫質)"],
             };
-            let selection = InquireSelect::new("> 請選擇下載的輸出封裝格式：", formats)
-                .prompt()
-                .unwrap_or("mp4");
-
+            let selection = Select::with_theme(&theme)
+                .with_prompt("📦 請選擇輸出格式")
+                .items(&formats)
+                .default(0)
+                .interact()?;
             // 清洗字串：只取第一個空格前的部分 (例如 "mp4" 或 "mkv")
-            selection
+            formats[selection]
                 .split_whitespace()
                 .next()
-                .unwrap_or("mp4")
+                .unwrap()
                 .to_string()
         }
     };
@@ -99,54 +67,24 @@ pub fn get_user_input(args: &crate::args::Args) -> Result<(Vec<String>, u8, Stri
     Ok((urls, media_type_enum as u8, format))
 }
 
-/// 下載完成後的總結報告 (動態畫出外框，解決 CJK 字串與長路徑導致外框凸出的問題)
+/// 📊 下載完成後的總結報告
 pub fn print_summary(success: usize, fail: usize, duration: &str, path: &str) {
-    let title_line = "  yt-dlp-tui 任務執行總結  ".to_string();
-    let duration_line = format!("  總體耗時：{}", duration);
-    let stats_line = format!("  任務統計：成功 {} 個 / 失敗 {} 個", success, fail);
-    let path_line = format!("  儲存路徑：{}", path);
-
-    // 計算這幾行中最大的視覺寬度，並給予一個最小預設寬度 (例如 54) 確保基本美觀
-    let max_content_w = [
-        display_width(&title_line),
-        display_width(&duration_line),
-        display_width(&stats_line),
-        display_width(&path_line),
-    ]
-    .iter()
-    .copied()
-    .max()
-    .unwrap_or(54);
-
-    let box_width = max_content_w.max(54);
-
-    // 根據最長的一行，動態重繪頂部、中部與底部外框
-    let top_border = format!("┌{}┐", "─".repeat(box_width));
-    let middle_border = format!("├{}┤", "─".repeat(box_width));
-    let bottom_border = format!("└{}┘", "─".repeat(box_width));
-
-    println!("\n{}", top_border);
-    println!("│{}│", pad_line(&title_line, box_width));
-    println!("{}", middle_border);
-    println!("│{}│", pad_line(&duration_line, box_width));
-    println!("│{}│", pad_line(&stats_line, box_width));
-    println!("│{}│", pad_line(&path_line, box_width));
-    println!("{}", bottom_border);
-
-    if fail > 0 {
-        println!(
-            "\n[Warning] 有 {} 個項目下載失敗。您可以查看儲存路徑下的 [download_session.md] 獲取詳細錯誤日誌。",
-            fail
-        );
-    }
+    println!("\n=================================================");
+    println!("✅ 所有並行下載任務完成！");
+    println!("⏱️  總任務耗時：{}", duration);
+    println!("📊 統計報告：成功 {} / 失敗 {}", success, fail);
+    println!("📂 檔案存檔路徑：{}", path);
+    println!("=================================================");
 }
 
-/// 畫質選擇選單
+/// 🎬 畫質選擇選單（在 MKV 格式下檢測到大於 1080p 規格時主動彈出）
 pub fn select_resolution(formats: &[VideoFormat]) -> Option<String> {
     let mut options_raw: Vec<&VideoFormat> = formats.iter().filter(|f| f.height > 1080).collect();
     if options_raw.is_empty() {
         return None;
     }
+
+    // 將最高品質的 1080p 也塞進去作為基本款選項
     if let Some(fhd) = formats
         .iter()
         .filter(|f| f.height <= 1080)
@@ -154,28 +92,17 @@ pub fn select_resolution(formats: &[VideoFormat]) -> Option<String> {
     {
         options_raw.push(fhd);
     }
+
     options_raw.sort_by(|a, b| b.height.cmp(&a.height));
     options_raw.dedup_by(|a, b| a.height == b.height);
 
     let display_options: Vec<String> = options_raw
         .iter()
-        .map(|f| {
-            let quality_label = match f.height {
-                4320 => "8K Ultra HD (極致震撼畫質)",
-                2160 => "4K Ultra HD (精細超高解析度)",
-                1440 => "2K Quad HD (細緻高解析度)",
-                1080 => "1080p Full HD (標準主流高畫質)",
-                _ => "高畫質視訊",
-            };
-            format!(
-                "{} - {}p (編碼: {}, 格式: {})",
-                quality_label, f.height, f.vcodec, f.ext
-            )
-        })
+        .map(|f| format!("{}p (編碼: {}), 來源: {})", f.height, f.vcodec, f.ext))
         .collect();
 
     let ans = InquireSelect::new(
-        "[Config] 偵測到高畫質選項，請選擇您偏好的解析度：",
+        "✨ 偵測到高畫質選項，請選擇下載解析度：",
         display_options.clone(),
     )
     .prompt()
@@ -185,24 +112,26 @@ pub fn select_resolution(formats: &[VideoFormat]) -> Option<String> {
     Some(options_raw[idx].format_id.clone())
 }
 
-/// 提供使用者選擇要下載的語言
+/// 💬 提供使用者選擇要下載與保留的語言（包含 B站 彈幕選取通道）
 pub fn select_subtitles(available_langs: &[String]) -> Vec<String> {
     let mut options = Vec::new();
+
     if available_langs
         .iter()
-        .any(|l| l.contains("zh") || l.contains("chi"))
+        .any(|l| l.contains("zh") || l.contains("chi") || l == "danmaku")
     {
-        options.push("1. 中文 (正體/簡體/彈幕)");
+        options.push("中文 (繁/簡/彈幕)");
     }
     if available_langs.iter().any(|l| l.starts_with("en")) {
-        options.push("2. 英文 (English)");
+        options.push("英文 (English)");
     }
     if available_langs
         .iter()
         .any(|l| l.starts_with("ja") || l.starts_with("jpn"))
     {
-        options.push("3. 日文 (日本語)");
+        options.push("日文 (日本語)");
     }
+
     if options.is_empty() {
         return vec![];
     }
@@ -212,7 +141,7 @@ pub fn select_subtitles(available_langs: &[String]) -> Vec<String> {
         .with_unselected_checkbox(Styled::new("[ ]"));
 
     let ans = MultiSelect::new(
-        "[Config] 偵測到可用字幕，請選擇要保留的語言 (按【空白鍵 Space】勾選，【Enter】確認)：",
+        "✨ 偵測到可用字幕/彈幕軌，請選擇要保留的語言 (Space 勾選 / Enter 確認)：",
         options,
     )
     .with_render_config(render_config)
@@ -222,7 +151,7 @@ pub fn select_subtitles(available_langs: &[String]) -> Vec<String> {
     let mut selected_langs = Vec::new();
     for a in ans {
         match a {
-            "1. 中文 (正體/簡體/彈幕)" => selected_langs.extend(vec![
+            "中文 (繁/簡/彈幕)" => selected_langs.extend(vec![
                 "zh-Hant".into(),
                 "zh-TW".into(),
                 "zh-HK".into(),
@@ -231,54 +160,79 @@ pub fn select_subtitles(available_langs: &[String]) -> Vec<String> {
                 "chi".into(),
                 "danmaku".into(),
             ]),
-            "2. 英文 (English)" => {
+            "英文 (English)" => {
                 selected_langs.extend(vec!["en".into(), "en-US".into(), "en-GB".into()])
             }
-            "3. 日文 (日本語)" => selected_langs.extend(vec!["ja".into(), "jpn".into()]),
+            "日文 (日本語)" => selected_langs.extend(vec!["ja".into(), "jpn".into()]),
             _ => {}
         }
     }
     selected_langs
 }
 
-/// 發生錯誤時的攔截選單
+/// 🚨 定義錯誤恢復的選擇項目
+pub enum ErrorRecoveryChoice {
+    Browser,
+    Manual,
+    Abort,
+}
+
+/// 發生下載中斷、年齡限制或權限受阻時的 TUI 攔截救援選單
 pub fn prompt_error_recovery(fail_count: usize) -> ErrorRecoveryChoice {
+    let theme = ColorfulTheme::default();
     println!("\n=================================================");
     println!(
-        "[Warning] 偵測到 {} 個任務下載失敗 (可能因權限或年齡限制)",
+        "⚠️  下載途中遭遇阻礙：共計有 {} 個任務下載失敗 (可能因年齡或會員權限受限)",
         fail_count
     );
     let options = vec![
-        "1. 自動套用瀏覽器 Cookie (推薦，可破解年齡限制)",
-        "2. 自行匯入 Cookie 檔案",
-        "3. 放棄失敗項目並結束程式",
+        "🌐 自動套用瀏覽器 Cookie (推薦！免匯出，快速破解受限限制)",
+        "📂 手動放入實體 Cookie 檔案 (支援 cookie_site.txt 偵測機制)",
+        "❌ 放棄失敗項目並結束程式",
     ];
 
-    let selection = InquireSelect::new("請問要如何處理失敗的任務？", options)
-        .prompt()
-        .unwrap_or_else(|_| "3. 放棄失敗項目並結束程式");
+    let selection = Select::with_theme(&theme)
+        .with_prompt("請問要如何處置這些下載失敗的任務？")
+        .items(&options)
+        .default(0)
+        .interact()
+        .unwrap_or(2);
 
     match selection {
-        "1. 自動套用瀏覽器 Cookie (推薦，可破解年齡限制)" => {
-            ErrorRecoveryChoice::Browser
-        }
-        "2. 自行匯入 Cookie 檔案" => ErrorRecoveryChoice::Manual,
+        0 => ErrorRecoveryChoice::Browser,
+        1 => ErrorRecoveryChoice::Manual,
         _ => ErrorRecoveryChoice::Abort,
     }
 }
 
-/// 選擇要爬取的瀏覽器
-pub fn select_browser(configured_browsers: &[String]) -> String {
-    if configured_browsers.is_empty() {
-        return "chrome".to_string();
-    }
+/// 🎯 核心 V2 重構：動態瀏覽器選擇選單
+/// 徹底擺脫 V1 硬編碼 (Hardcode) 限制，根據傳入的設定檔 preferred_browsers 列表動態生成！
+pub fn select_browser(preferred_browsers: &[String]) -> String {
+    let theme = ColorfulTheme::default();
 
-    let ans = InquireSelect::new(
-        "[Config] 請選擇您有登入該網站帳號的瀏覽器：",
-        configured_browsers.to_vec(),
-    )
-    .prompt()
-    .unwrap_or_else(|_| configured_browsers[0].clone());
+    // 🛡️ Fallback 安全保護：如果傳入的名單因為某些原因留空，則自動退回基礎常見瀏覽器名單
+    let fallback_browsers = vec![
+        "chrome".to_string(),
+        "firefox".to_string(),
+        "safari".to_string(),
+        "edge".to_string(),
+    ];
 
-    ans
+    let list_to_use = if preferred_browsers.is_empty() {
+        &fallback_browsers
+    } else {
+        preferred_browsers
+    };
+
+    println!("\n🌐 自動套用 Cookie 救援機制");
+    println!("程式將會自動從您指定的瀏覽器安全抽取 Cookie 資料庫，繞過網頁登入與年齡限制：");
+
+    let selection = Select::with_theme(&theme)
+        .with_prompt("請選擇您在本地端「有登入該網站帳號」的常用瀏覽器")
+        .items(list_to_use)
+        .default(0)
+        .interact()
+        .unwrap_or(0);
+
+    list_to_use[selection].to_string()
 }
