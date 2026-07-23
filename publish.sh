@@ -1,120 +1,108 @@
-#!/bin/bash
-
-# =====================================================================
-# yt-dlp-tui 跨平台智慧發布指令碼 (V3 - 支援 Pre-release 與分支智慧判定)
-# =====================================================================
-
-# 確保指令失敗時立刻中斷
+#!/usr/bin/env bash
 set -e
 
-# 定義顯示樣式 (相容無特殊字元終端機)
-info() { echo "[Info] $1"; }
-warn() { echo "[Warning] $1"; }
-err() { echo "[Error] $1"; exit 1; }
-success() { echo "[Success] $1"; }
-
-# 1. 執行前置本地 Rust 代碼檢查 (cargo check)
-info "正在執行前置編譯安全性檢查 (cargo check)..."
+# 1. 執行 cargo check 進行前置安全編譯檢查
+echo "[Info] 正在執行 cargo check 進行前置編譯檢查..."
 if ! cargo check; then
-    err "本地代碼編譯檢查失敗！請修復錯誤後再嘗試發布。"
+    echo "[Error] 本地代碼編譯失敗！請先修復錯誤再進行發布。"
+    exit 1
 fi
-success "本地代碼檢查通過！"
+echo "[Success] 本地代碼編譯檢查通過！"
 
-# 2. 獲取當前 Git 分支與 Cargo.toml 中的版本號
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+# 2. 讀取 Cargo.toml 內的第一個 version 號
 VER=$(grep -m 1 '^version' Cargo.toml | cut -d '"' -f 2)
-
 if [ -z "$VER" ]; then
-    err "無法從 Cargo.toml 中解析出版本號 (version)。"
+    echo "[Error] 無法從 Cargo.toml 中讀取到版本號！"
+    exit 1
+fi
+TAG="v$VER"
+echo "[Info] 偵測到發布版本號為: $TAG"
+
+# 檢查此 Tag 是否已在本地存在
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+    echo "[Error] 標籤 $TAG 已在本地存在！請在 Cargo.toml 中更新版本號。"
+    exit 1
 fi
 
-# 3. 智慧判定版本類型與分支相容性
+# 3. 檢查目前所在的分支與版號是否匹配
+BRANCH=$(git branch --show-current)
+echo "[Info] 目前所在分支為: $BRANCH"
+
+# 判定是否為 beta/pre-release 版本 (版號中包含 '-')
 IS_PRERELEASE=false
 if [[ "$VER" == *"-"* ]]; then
     IS_PRERELEASE=true
 fi
 
-info "偵測到目前 Git 分支：$CURRENT_BRANCH"
-info "偵測到 Cargo.toml 版本號：$VER (Pre-release: $IS_PRERELEASE)"
-
-# 智慧防錯警告邏輯
-if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
-    if [ "$IS_PRERELEASE" = true ]; then
-        warn "您目前在主分支 ($CURRENT_BRANCH)，但 Cargo.toml 中的版本號卻是預發布格式 ($VER)。"
-        read -p "確定要在主分支發布 Pre-release 版本嗎？(y/N) " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            err "已取消發布。"
-        fi
+if [ "$BRANCH" = "dev" ] && [ "$IS_PRERELEASE" = "false" ]; then
+    echo "[Warning] 您目前在 dev 分支，但準備發布正式版本號 ($VER)！"
+    read -r -p "是否要繼續發布？(y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "[Info] 發布已取消。"
+        exit 0
     fi
+elif [ "$BRANCH" = "main" ] && [ "$IS_PRERELEASE" = "true" ]; then
+    echo "[Warning] 您目前在 main 分支，但準備發布預發布版本號 ($VER)！"
+    read -r -p "是否要繼續發布？(y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "[Info] 發布已取消。"
+        exit 0
+    fi
+fi
+
+# 4. 提示輸入自訂的版本標籤說明 (Tag Message)
+echo ""
+echo "=================================================="
+echo "請輸入本次版本的更新說明 (Tag 說明)："
+echo "例如：'修正 ui 對齊問題' 或 '新增自動黑名單防護與重試功能'"
+echo "=================================================="
+read -r -p "> " USER_DESCRIPTION
+
+if [ -z "$USER_DESCRIPTION" ]; then
+    TAG_MSG="Release $TAG: 效能優化與問題修正"
+    echo "[Info] 未輸入說明，將使用預設值: '$TAG_MSG'"
 else
-    # 在非主分支 (例如 dev)
-    if [ "$IS_PRERELEASE" = false ]; then
-        warn "您目前在開發分支 ($CURRENT_BRANCH)，但 Cargo.toml 中的版本號是正式版格式 ($VER)。"
-        echo "💡 提示：建議在開發分支使用 pre-release 命名格式 (例如 $VER-beta.1)；"
-        echo "   或者切換至 main 分支再發布正式版本。"
-        read -p "您確定要直接在開發分支發布正式版嗎？(y/N) " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            err "已取消發布。請先修改 Cargo.toml 的版本號或切換 Git 分支。"
-        fi
-    fi
+    TAG_MSG="Release $TAG: $USER_DESCRIPTION"
 fi
+echo "[Info] 最終 Tag 說明將設定為: '$TAG_MSG'"
+echo ""
 
-TAG="v$VER"
-
-# 4. 檢查 Tag 是否已存在 (本地與遠端)
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    err "本地已存在標籤 $TAG，請先在 Cargo.toml 中增加版本號！"
-fi
-
-# 5. 處理工作區未提交的修改 (Dirty Working Tree)
+# 5. 檢查是否有未提交的變更 (Dirty Workspace)
 if ! git diff-index --quiet HEAD --; then
-    warn "偵測到您的工作區有未提交的代碼修改："
+    echo "[Warning] 本地工作區有尚未提交的修改："
     git status -s
     echo ""
-    read -p "是否自動將這些修改併入本次發布的 Commit 中？(y/N) " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        info "正在暫存並提交修改..."
+    read -r -p "是否自動將上述修改加入 Commit 並發布？(y/N): " CONFIRM_COMMIT
+    if [[ "$CONFIRM_COMMIT" =~ ^[Yy]$ ]]; then
         git add .
-        git commit -m "chore: release $TAG ($CURRENT_BRANCH)"
+        git commit -m "chore: release $TAG"
+        echo "[Success] 已建立 Release Commit"
     else
-        err "發布已中斷。請先手動處理您的未提交變更 (Git Commit) 後再執行本指令碼。"
+        echo "[Info] 請手動提交或清理工作區後再執行發布。"
+        exit 0
     fi
 else
-    # 工作區乾淨，但可能修改了 Cargo.toml 還未 commit
-    info "工作區狀態乾淨，正在為發布建立 Commit..."
-    # 建立一個空 commit 或自動 add Cargo.toml/Cargo.lock 確保版本號同步
-    git add Cargo.toml Cargo.lock 2>/dev/null || true
-    git commit -m "chore: bump version to $TAG ($CURRENT_BRANCH)" 2>/dev/null || info "無新變更需要 Commit，將直接打上 Tag。"
+    echo "[Info] 本地工作區乾淨，直接進行發布程序。"
 fi
 
-# 6. 本地建立 Tag
-info "正在建立本地標籤：$TAG..."
-git tag -a "$TAG" -m "Release $TAG: 於分支 $CURRENT_BRANCH 自動建構發布"
+# 6. 本地建立 Tag 並推送 (包含出錯回滾機制)
+echo "[Info] 正在建立本地標籤 $TAG..."
+git tag -a "$TAG" -m "$TAG_MSG"
 
-# 7. 推送至 GitHub (包含程式碼與 Tag)
-info "正在推送代碼至遠端倉庫 ($CURRENT_BRANCH)..."
-if ! git push origin "$CURRENT_BRANCH"; then
-    git tag -d "$TAG" # 發生錯誤時本地回滾刪除 Tag
-    err "代碼推送失敗！已自動在本地刪除 $TAG 標籤以保持狀態乾淨。"
-fi
-
-info "正在推送標籤至遠端倉庫 ($TAG)..."
-if ! git push origin "$TAG"; then
-    git tag -d "$TAG"
-    # 嘗試刪除 GitHub 上可能推送失敗但產生殘留的遠端標籤 (防護)
-    git push origin --delete "$TAG" >/dev/null 2>&1 || true
-    err "標籤推送失敗！已自動在本地刪除 $TAG 標籤以保持狀態乾淨。"
-fi
-
-# 8. 成功總結
-echo ""
-echo "====================================================================="
-if [ "$IS_PRERELEASE" = true ]; then
-    success "一鍵發布指令執行完畢！"
-    info "GitHub Actions 偵測到版本號含有 '-'，將會自動建構為 [Pre-release (預發布)] 版本！"
+echo "[Info] 正在推送到遠端倉庫..."
+if git push origin "$BRANCH" && git push origin "$TAG"; then
+    echo ""
+    echo "=================================================="
+    echo " [Success] 一鍵推送發布完成！"
+    echo " 遠端分支：$BRANCH"
+    echo " 發布標籤：$TAG ($TAG_MSG)"
+    echo "=================================================="
+    echo "提示：GitHub Actions 已被觸發，請前往 Actions 頁面查看編譯進度。"
 else
-    success "一鍵發布指令執行完畢！"
-    info "GitHub Actions 將會自動建構為 [Latest (正式發行)] 版本！"
+    echo ""
+    echo "[Error] 推送至 GitHub 失敗！"
+    echo "正在回滾本地建立的標籤 $TAG，以保持本地與遠端同步..."
+    git tag -d "$TAG"
+    echo "[Info] 本地標籤 $TAG 已刪除。請確認您的網路連接、GitHub 權限，然後再試一次。"
+    exit 1
 fi
-info "請前往您的 GitHub Repository -> Actions 查看自動化跨平台編譯進度。"
-echo "====================================================================="
